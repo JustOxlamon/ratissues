@@ -102,11 +102,19 @@ export function runCliAsync(args, { dbPath, cwd, env: extraEnv, input } = {}) {
 }
 
 function buildEnv(dbPath, extraEnv) {
-  const env = { ...process.env, ...extraEnv };
+  const env = { ...process.env };
   delete env.RAT_PROJECT;
   delete env.RAT_DB;
   delete env.RAT_ACTOR;
   delete env.FORCE_COLOR;
+  // Автобекапы в тестах по умолчанию выключены: иначе каждый CLI-вызов
+  // оставляет файлы в песочнице. Тесты бэкапов включают их явно.
+  delete env.RAT_BACKUP;
+  delete env.RAT_BACKUP_DIR;
+  delete env.RAT_BACKUP_INTERVAL;
+  delete env.RAT_BACKUP_KEEP;
+  Object.assign(env, extraEnv ?? {});
+  if (extraEnv?.RAT_BACKUP === undefined) env.RAT_BACKUP = 'off';
   if (dbPath) env.RAT_DB = dbPath;
   env.RAT_ACTOR = 'test';
   return env;

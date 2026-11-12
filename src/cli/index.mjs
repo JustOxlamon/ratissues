@@ -5,7 +5,9 @@ import {
   resolveDbPath,
   UsageError,
 } from '../core/db.mjs';
+import { maybeBackup } from '../core/backup.mjs';
 import * as addCommand from './commands/add.mjs';
+import * as backupCommand from './commands/backup.mjs';
 import * as claimCommand from './commands/claim.mjs';
 import * as commentCommand from './commands/comment.mjs';
 import * as doctorCommand from './commands/doctor.mjs';
@@ -24,6 +26,7 @@ import * as statusCommand from './commands/status.mjs';
 const COMMAND_MODULES = [
   initCommand,
   doctorCommand,
+  backupCommand,
   projectCommand,
   addCommand,
   lsCommand,
@@ -92,6 +95,13 @@ export async function main(argv = process.argv.slice(2), context = {}) {
   }
 
   const dbPath = resolveDbPath(flags.db, io.env);
+
+  // Автобекап до выполнения команды: копия фиксирует состояние «до записи».
+  // Команда backup управляет копиями сама — ей автозапуск не нужен.
+  if (!flags.noBackup && commandName !== 'backup') {
+    runAutoBackup(dbPath, flags, io);
+  }
+
   let wrapper = null;
 
   const ctx = {
@@ -143,10 +153,10 @@ export async function main(argv = process.argv.slice(2), context = {}) {
  * Разбирает глобальные флаги в любом месте argv.
  * Командные флаги остаются в rest нетронутыми.
  * @param {string[]} argv
- * @returns {{flags: {json:boolean, quiet:boolean, help:boolean, db:string|null, actor:string|null}, rest: string[]}}
+ * @returns {{flags: {json:boolean, quiet:boolean, help:boolean, noBackup:boolean, db:string|null, actor:string|null}, rest: string[]}}
  */
 export function parseGlobalFlags(argv) {
-  const flags = { json: false, quiet: false, help: false, db: null, actor: null };
+  const flags = { json: false, quiet: false, help: false, noBackup: false, db: null, actor: null };
   const rest = [];
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -161,6 +171,10 @@ export function parseGlobalFlags(argv) {
     }
     if (arg === '--quiet') {
       flags.quiet = true;
+      continue;
+    }
+    if (arg === '--no-backup') {
+      flags.noBackup = true;
       continue;
     }
     if (arg === '--help' || arg === '-h') {
@@ -185,8 +199,26 @@ export function parseGlobalFlags(argv) {
   return { flags, rest };
 }
 
-function readFlagValue(argv, index, name) {
-  const arg = argv[index];
+/**
+ * Автобекап базы (по интервалу, см. RAT_BACKUP_* в core/backup.mjs).
+ * Сбой копии только предупреждает: команда должна выполниться.
+ * @param {string} dbPath
+ * @param {{quiet?: boolean, json?: boolean}} flags
+ * @param {{stderr: NodeJS.WritableStream, env: NodeJS.ProcessEnv}} io
+ */
+function runAutoBackup(dbPath, flags, io) {
+  let result;
+  try {
+    result = maybeBackup(dbPath, { env: io.env });
+  } catch (err) {
+    result = { created: false, reason: 'error', error: err?.message ?? String(err) };
+  }
+  if (result.reason === 'error' && !flags.quiet) {
+    io.stderr.write(`Предупреждение: резервная копия не создана: ${result.error}\n`);
+  }
+}
+
+function readFlagValue(argv, index, name) {  const arg = argv[index];
   const eq = arg.indexOf('=');
   if (eq !== -1) {
     const value = arg.slice(eq + 1);
@@ -264,6 +296,7 @@ export function printHelp(stream, commandName) {
     '  --json          машиночитаемый вывод',
     '  --db <path>     путь к базе (иначе $RAT_DB или data/issues.db)',
     '  --actor <name>  автор событий (иначе $RAT_ACTOR или cli)',
+    '  --no-backup     не делать автобекап перед командой',
     '  --quiet         минимальный вывод',
     '  -h, --help      эта справка',
     '',
