@@ -47,6 +47,34 @@ node bin/rat.mjs export AXEL --format jsonl --out -
 На Windows те же команды: `bin\rat.cmd init`, `bin\rat.cmd add ...` (или
 добавьте каталог `bin` в `PATH`).
 
+## Глобальный запуск (из любого каталога)
+
+Установки нет: глобально ставятся только тонкие обёртки, которые вызывают
+`node --no-warnings <repo>/bin/rat.mjs`. Код и тесты остаются в репозитории.
+
+- `C:\Users\<user>\bin\rat.cmd` — для cmd/PowerShell;
+- `C:\Users\<user>\bin\rat` — для git-bash и shell-инструмента opencode;
+- каталог добавлен в пользовательский `PATH`.
+
+Обёртки задают значения по умолчанию только если переменная не задана:
+
+```bash
+RAT_SRC   # корень репозитория (поправить, если репозиторий переедет)
+RAT_DB    # %USERPROFILE%\.rat\issues.db — стабильная база вне репозитория
+```
+
+`RAT_DB` вне репозитория — сознательно: `data/` в `.gitignore`, а база должна
+переживать переезд/переустановку кода. Проверка:
+
+```bash
+cd /d/any/other/project && rat project ls --json && rat ls --json
+```
+
+Для агентов opencode: глобальный скилл `rat`
+(`~/.config/opencode/skills/rat/SKILL.md`) описывает протокол работы (цикл
+`next → claim → comment → done`, коды выхода, `--actor`, `--idem`), поэтому
+правила доступны в любой сессии, а не только в этом репозитории.
+
 ## Команды
 
 Формат: `rat <команда> [project] [аргументы] [флаги]`.
@@ -100,7 +128,7 @@ node bin/rat.mjs export AXEL --format jsonl --out -
 
 | Переменная | Смысл |
 |---|---|
-| `RAT_DB` | путь к базе; по умолчанию `data/issues.db` от корня репозитория |
+| `RAT_DB` | путь к базе; по умолчанию `data/issues.db` от корня репозитория (глобальная обёртка подставляет `%USERPROFILE%\.rat\issues.db`) |
 | `RAT_ACTOR` | автор событий; по умолчанию `cli` |
 | `RAT_PROJECT` | проект по умолчанию, если не задан `--project` |
 | `NO_COLOR` / `FORCE_COLOR` | управление ANSI-цветом в человекочитаемом выводе |
