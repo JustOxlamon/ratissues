@@ -2,7 +2,7 @@
   "name": "ratissues",
   "version": "0.1.0",
   "private": true,
-  "description": "Локальный трекер задач для множества мелких проектов (Node 24 + node:sqlite)",
+  "description": "Local issue tracker for many small projects (Node 24 + node:sqlite)",
   "license": "MIT",
   "repository": {
     "type": "git",
