@@ -1,7 +1,7 @@
 import path from 'node:path';
 
 import {
-  getSchemaVersion,
+  ensureSchemaCurrent,
   NotFoundError,
   readMeta,
   unwrapDb,
@@ -116,12 +116,7 @@ export function listProjects(wrapperOrDb, { includeArchived = false } = {}) {
  */
 export function resolveProject(wrapperOrDb, { project = null, cwd = process.cwd(), env = process.env } = {}) {
   const db = unwrapDb(wrapperOrDb);
-  if (getSchemaVersion(wrapperOrDb) === 0) {
-    throw new NotFoundError('База не инициализирована.', {
-      code: 'db_not_initialized',
-      hint: 'Выполните: rat init',
-    });
-  }
+  ensureSchemaCurrent(wrapperOrDb);
 
   if (project !== null && project !== undefined && String(project).trim() !== '') {
     const key = normalizeProjectKey(String(project));
@@ -777,12 +772,7 @@ export function getStats(wrapper, { now = Date.now() } = {}) {
 // Внутренние помощники M2
 
 function ensureReady(wrapper) {
-  if (getSchemaVersion(wrapper) === 0) {
-    throw new NotFoundError('База не инициализирована.', {
-      code: 'db_not_initialized',
-      hint: 'Выполните: rat init',
-    });
-  }
+  ensureSchemaCurrent(wrapper);
 }
 
 function requireExistingProject(db, value) {

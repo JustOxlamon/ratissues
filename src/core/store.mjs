@@ -3,6 +3,7 @@ import path from 'node:path';
 import {
   ConflictError,
   DbError,
+  ensureSchemaCurrent,
   getSchemaVersion,
   migrate,
   NotFoundError,
@@ -1059,12 +1060,7 @@ function sameStringArray(a, b) {
 // Внутренние помощники M1
 
 function ensureInitialized(wrapper) {
-  if (getSchemaVersion(wrapper) === 0) {
-    throw new NotFoundError('База не инициализирована.', {
-      code: 'db_not_initialized',
-      hint: 'Выполните: rat init',
-    });
-  }
+  ensureSchemaCurrent(wrapper);
 }
 
 function findEventByIdem(db, kind, idem, issueId = null) {
@@ -1339,6 +1335,13 @@ export function doctor(wrapper) {
       id: 'schema',
       ok: false,
       message: `Версия схемы ${schemaVersion} новее поддерживаемой ${SCHEMA_VERSION}`,
+      details: { schemaVersion, supportedVersion: SCHEMA_VERSION },
+    });
+  } else if (schemaVersion < SCHEMA_VERSION) {
+    checks.push({
+      id: 'schema',
+      ok: false,
+      message: `Схема v${schemaVersion} устарела — нужна v${SCHEMA_VERSION}; выполните rat init`,
       details: { schemaVersion, supportedVersion: SCHEMA_VERSION },
     });
   } else {

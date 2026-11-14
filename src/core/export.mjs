@@ -1,7 +1,7 @@
 import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { DbError, NotFoundError, REPO_ROOT, unwrapDb, UsageError } from './db.mjs';
+import { DbError, ensureSchemaCurrent, NotFoundError, REPO_ROOT, unwrapDb, UsageError } from './db.mjs';
 import { listEvents } from './events.mjs';
 import {
   ACTIVE_STATUSES,
@@ -67,6 +67,7 @@ export function buildExport(wrapper, {
       hint: 'rat export --format jsonl --events --out -',
     });
   }
+  ensureSchemaCurrent(wrapper);
   const normalizedLimit = normalizeLimit(limit);
   const scope = resolveScope(wrapper, {
     project,

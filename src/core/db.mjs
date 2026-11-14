@@ -181,6 +181,44 @@ export function getSchemaVersion(wrapperOrDb) {
 }
 
 /**
+ * Проверяет, что схема инициализирована и соответствует версии этого rat.
+ *
+ * Миграции применяет только `rat init` (PLAN §13), поэтому остальные команды
+ * не «догоняют» схему сами, а падают понятной ошибкой с подсказкой. Без этой
+ * проверки устаревшая база v1/v2 падала бы сырой ошибкой SQLite
+ * («no such table: milestones») из-за новых запросов.
+ * @param {{db: DatabaseSync}|DatabaseSync} wrapperOrDb
+ * @returns {number} текущая версия схемы
+ * @throws {NotFoundError} база не инициализирована
+ * @throws {DbError} схема устарела или новее поддерживаемой
+ */
+export function ensureSchemaCurrent(wrapperOrDb) {
+  const version = getSchemaVersion(wrapperOrDb);
+  if (version === 0) {
+    throw new NotFoundError('База не инициализирована.', {
+      code: 'db_not_initialized',
+      hint: 'Выполните: rat init',
+    });
+  }
+  if (version > SCHEMA_VERSION) {
+    throw new DbError(
+      `Версия схемы базы (${version}) новее, чем поддерживает этот rat (${SCHEMA_VERSION}).`,
+      { code: 'schema_too_new', hint: 'Обновите rat или укажите другую базу через --db.' },
+    );
+  }
+  if (version < SCHEMA_VERSION) {
+    throw new DbError(
+      `Схема базы устарела: v${version}, нужна v${SCHEMA_VERSION}.`,
+      {
+        code: 'schema_outdated',
+        hint: 'Обновите схему: rat init (данные сохранятся; при сомнениях сначала rat backup).',
+      },
+    );
+  }
+  return version;
+}
+
+/**
  * Есть ли таблица/виртуальная таблица с таким именем.
  * @param {{db: DatabaseSync}|DatabaseSync} wrapperOrDb
  * @param {string} name

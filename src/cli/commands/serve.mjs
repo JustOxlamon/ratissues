@@ -3,6 +3,7 @@ import { platform } from 'node:os';
 import path from 'node:path';
 
 import {
+  ensureSchemaCurrent,
   EXIT_CODES,
   getSchemaVersion,
   REPO_ROOT,
@@ -53,6 +54,8 @@ export async function run(ctx) {
   if (getSchemaVersion(wrapper) === 0) {
     const report = initDatabase(wrapper);
     if (!ctx.flags.quiet) ctx.print(`База инициализирована: ${report.path}`);
+  } else {
+    ensureSchemaCurrent(wrapper);
   }
 
   const webDir = path.join(REPO_ROOT, 'web');
