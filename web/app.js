@@ -26,11 +26,13 @@ const state = {
   q: '',
   status: 'active',
   label: '',
+  milestone: '', // '' = все, 'none' = без милстоуна, иначе имя
   sort: 'pri',
   cursor: null,
   issues: [],
   stats: null,
   projects: [],
+  milestones: [],
   selectedIndex: -1,
 };
 
@@ -44,6 +46,7 @@ const els = {
   search: $('#search'),
   statusChips: $('#status-chips'),
   labelFilter: $('#label-filter'),
+  milestoneFilter: $('#milestone-filter'),
   sort: $('#sort'),
   content: $('#content'),
   empty: $('#empty'),
@@ -60,6 +63,7 @@ const els = {
   newIssueOverlay: $('#new-issue-overlay'),
   newIssueForm: $('#new-issue-form'),
   newProject: $('#new-project'),
+  newMilestone: $('#new-milestone'),
   newTitle: $('#new-title'),
   newBody: $('#new-body'),
   newPriority: $('#new-priority'),
@@ -204,8 +208,17 @@ function parseHash() {
 
 function applyRoute() {
   const route = parseHash();
-  if (route.view === 'project') state.project = route.project;
-  else if (route.view === 'home') state.project = null;
+  const nextProject = route.view === 'project'
+    ? route.project
+    : route.view === 'home'
+      ? null
+      : state.project;
+  if (nextProject !== state.project) {
+    state.milestone = '';
+    state.cursor = null;
+    state.selectedIndex = -1;
+  }
+  state.project = nextProject;
   closeDrawer();
   refreshAll();
 }
@@ -220,7 +233,7 @@ async function refreshAll() {
   }
 
   try {
-    await Promise.all([loadProjects(seq), loadStats(seq)]);
+    await Promise.all([loadProjects(seq), loadStats(seq), loadMilestones(seq)]);
     if (isStale(seq)) return;
 
     const route = parseHash();
@@ -292,7 +305,57 @@ function renderSidebarList(root, search) {
     }
     row.appendChild(badges);
     root.appendChild(row);
+    const milestoneBlock = renderSidebarMilestones(project);
+    if (milestoneBlock) root.appendChild(milestoneBlock);
   }
+}
+
+/** До трёх открытых милстоунов проекта с мини-прогрессом (M7.5). */
+function renderSidebarMilestones(project) {
+  const items = openMilestonesFor(project.key).slice(0, 3);
+  if (items.length === 0) return null;
+
+  const wrap = el('div', 'pl-8 pr-3 pb-2 space-y-1');
+  for (const milestone of items) {
+    const { progress } = milestone;
+    const active = state.project === project.key && state.milestone === milestone.name;
+    const row = el('a', [
+      'block rounded px-2 py-1 text-[11px] hover:bg-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500',
+      active ? 'bg-zinc-900 text-sky-300' : 'text-zinc-500',
+    ]);
+    row.href = `#/project/${project.key}`;
+    row.title = `Милстоун ${milestone.name}: ${progress.done}/${progress.total} (${progress.percent}%)`;
+
+    const head = el('div', 'flex items-center justify-between gap-2');
+    head.appendChild(el('span', 'truncate text-zinc-300', milestone.name));
+    head.appendChild(el(
+      'span',
+      'font-mono text-[10px] text-zinc-500 shrink-0',
+      `${progress.done}/${progress.total} (${progress.percent}%)`,
+    ));
+    row.appendChild(head);
+
+    const track = el('div', 'mt-1 h-1 rounded bg-zinc-800 overflow-hidden');
+    const fill = el('div', 'h-1 rounded bg-sky-500');
+    fill.style.width = `${progress.percent}%`;
+    track.appendChild(fill);
+    row.appendChild(track);
+
+    row.addEventListener('click', (e) => {
+      state.milestone = milestone.name;
+      state.cursor = null;
+      state.selectedIndex = -1;
+      if (state.project !== project.key) state.project = project.key;
+      closeDrawer();
+      const target = `#/project/${project.key}`;
+      if (window.location.hash === target) {
+        e.preventDefault();
+        renderIssueList();
+      }
+    });
+    wrap.appendChild(row);
+  }
+  return wrap;
 }
 
 function renderMiniStats(root) {
@@ -317,6 +380,62 @@ async function loadStats(seq) {
   renderStatusChips();
   renderMiniStats(els.miniStats);
   renderMiniStats(els.drawerMiniStats);
+}
+
+function openMilestonesFor(projectKey) {
+  return state.milestones.filter((milestone) => milestone.project === projectKey);
+}
+
+function isMilestoneOpen(projectKey, name) {
+  return state.milestones.some(
+    (milestone) => milestone.project === projectKey && milestone.name === name,
+  );
+}
+
+async function loadMilestones(seq) {
+  const data = await api('/api/milestones?state=open');
+  if (isStale(seq)) return;
+  state.milestones = data.milestones;
+
+  if (!state.project) {
+    state.milestone = '';
+  } else if (state.milestone && state.milestone !== 'none'
+    && !openMilestonesFor(state.project).some((m) => m.name === state.milestone)) {
+    // милстоун закрыли или он из другого проекта — фильтр больше не валиден
+    state.milestone = '';
+  }
+
+  renderMilestoneFilter();
+  renderSidebarList(els.projectList, els.projectSearch.value);
+  renderSidebarList(els.drawerProjectList, els.drawerProjectSearch.value);
+}
+
+function renderMilestoneFilter() {
+  const select = els.milestoneFilter;
+  setVisible(select, Boolean(state.project));
+  clear(select);
+  if (!state.project) {
+    state.milestone = '';
+    return;
+  }
+
+  const addOption = (value, label) => {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    select.appendChild(opt);
+  };
+  addOption('', 'все милстоуны');
+  addOption('none', 'без милстоуна');
+
+  const items = openMilestonesFor(state.project);
+  for (const milestone of items) addOption(milestone.name, milestone.name);
+
+  if (state.milestone && state.milestone !== 'none'
+    && !items.some((milestone) => milestone.name === state.milestone)) {
+    state.milestone = '';
+  }
+  select.value = state.milestone;
 }
 
 // ---------------------------------------------------------------------------
@@ -350,6 +469,36 @@ function renderStatusChips() {
   }
 }
 
+function milestoneChip(name, open) {
+  const chip = el('span', [
+    'text-[10px] px-1.5 py-0.5 rounded border truncate max-w-[12rem]',
+    open
+      ? 'border-sky-500/30 bg-sky-500/10 text-sky-300'
+      : 'border-zinc-700 bg-zinc-800 text-zinc-400',
+  ], `◆ ${name}`);
+  chip.title = open ? `Милстоун ${name}` : `Милстоун ${name} закрыт`;
+  return chip;
+}
+
+/** Чип милстоуна в списке: клик фильтрует список, не открывая задачу. */
+function milestoneListChip(issue) {
+  const chip = milestoneChip(issue.milestone, isMilestoneOpen(issue.project, issue.milestone));
+  chip.classList.add('cursor-pointer', 'shrink-0', 'hover:border-zinc-600');
+  chip.title = `Фильтр по милстоуну ${issue.milestone}`;
+  chip.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    state.milestone = issue.milestone;
+    state.cursor = null;
+    state.selectedIndex = -1;
+    state.project = issue.project;
+    const target = `#/project/${issue.project}`;
+    if (window.location.hash === target) renderIssueList();
+    else window.location.hash = target;
+  });
+  return chip;
+}
+
 function issueRow(issue) {
   const project = state.projects.find((p) => p.key === issue.project);
   const color = project?.color;
@@ -377,6 +526,8 @@ function issueRow(issue) {
   const title = el('span', 'flex-1 min-w-0 truncate text-sm font-medium text-zinc-100');
   title.textContent = issue.title;
   desktop.appendChild(title);
+
+  if (issue.milestone) desktop.appendChild(milestoneListChip(issue));
 
   if (issue.labels.length) {
     const labels = el('span', 'hidden lg:flex flex-wrap gap-1 shrink-0 max-w-[12rem]');
@@ -412,6 +563,8 @@ function issueRow(issue) {
   const mTitle = el('div', 'text-sm font-medium text-zinc-100');
   mTitle.textContent = issue.title;
   mobile.appendChild(mTitle);
+
+  if (issue.milestone) mobile.appendChild(milestoneListChip(issue));
 
   if (issue.labels.length) {
     const labels = el('div', 'flex flex-wrap gap-1');
@@ -464,6 +617,7 @@ async function renderIssueList(seq) {
   els.search.value = state.q;
   els.labelFilter.value = state.label;
   els.sort.value = state.sort;
+  renderMilestoneFilter();
 
   const controller = new AbortController();
   listAbort = controller;
@@ -473,6 +627,7 @@ async function renderIssueList(seq) {
     if (state.project) params.set('project', state.project);
     if (state.status && state.status !== 'active') params.set('status', state.status);
     if (state.label) params.set('label', state.label);
+    if (state.milestone) params.set('milestone', state.milestone);
     if (state.q) params.set('q', state.q);
     params.set('sort', state.sort);
     params.set('limit', '25');
@@ -527,23 +682,28 @@ function renderEmpty() {
   let text = 'Задач нет.';
   if (state.q) text = `По запросу «${state.q}» ничего не найдено.`;
   else if (state.label) text = `Нет задач с меткой «${state.label}».`;
+  else if (state.milestone === 'none') text = 'Нет задач без милстоуна.';
+  else if (state.milestone) text = `Нет задач в милстоуне «${state.milestone}».`;
   else if (state.status && state.status !== 'active' && state.status !== 'all') {
     text = `Нет задач со статусом ${state.status}.`;
   } else if (state.project) {
     text = `В проекте ${state.project} нет активных задач.`;
   }
   els.empty.appendChild(el('div', 'text-zinc-500 text-sm text-center mt-10', text));
-  if (state.q || state.label || (state.status && state.status !== 'active' && state.status !== 'all')) {
+  if (state.q || state.label || state.milestone
+    || (state.status && state.status !== 'active' && state.status !== 'all')) {
     const reset = el('button', [
       'mt-3 px-3 py-1.5 rounded text-xs border border-zinc-700 text-zinc-300 hover:border-zinc-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500',
     ], 'Сбросить фильтры');
     reset.addEventListener('click', () => {
       state.q = '';
       state.label = '';
+      state.milestone = '';
       state.status = 'active';
       state.cursor = null;
       els.search.value = '';
       els.labelFilter.value = '';
+      els.milestoneFilter.value = '';
       window.location.hash = state.project ? `#/project/${state.project}` : '#/';
       renderIssueList();
     });
@@ -683,6 +843,37 @@ function describeEvent(event) {
   }
 }
 
+/** Опции милстоунов проекта: '' — без милстоуна, затем открытые. */
+function fillMilestoneOptions(select, projectKey, selectedName = null) {
+  clear(select);
+  const add = (value, label) => {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    select.appendChild(opt);
+  };
+  add('', 'без милстоуна');
+
+  const items = openMilestonesFor(projectKey);
+  for (const milestone of items) add(milestone.name, milestone.name);
+  if (selectedName && !items.some((milestone) => milestone.name === selectedName)) {
+    add(selectedName, `${selectedName} · closed`);
+  }
+  select.value = selectedName ?? '';
+}
+
+async function setIssueMilestone(id, value) {
+  try {
+    await api(`/api/issues/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ milestone: value || null }),
+    });
+    await refreshAll();
+  } catch (err) {
+    showDetailError(err.message);
+  }
+}
+
 async function setIssueStatus(id, status, currentStatus) {
   if (status === currentStatus) return;
   let reason = null;
@@ -760,6 +951,12 @@ async function renderIssueDetail(id, seq) {
     meta.appendChild(el('span', ['px-2 py-0.5 rounded border uppercase tracking-wide', statusClass(issue.status)], issue.status));
     meta.appendChild(el('span', 'text-zinc-400', `p${issue.priority}`));
     meta.appendChild(el('span', 'font-mono text-zinc-500', issue.id));
+    if (issue.milestone) {
+      meta.appendChild(milestoneChip(
+        issue.milestone,
+        isMilestoneOpen(issue.project, issue.milestone),
+      ));
+    }
     if (issue.assignee) meta.appendChild(el('span', 'text-zinc-400', issue.assignee));
     header.appendChild(meta);
     els.issueDetail.appendChild(header);
@@ -813,6 +1010,28 @@ async function renderIssueDetail(id, seq) {
     const closeHint = el('span', 'text-xs text-zinc-600 self-center ml-2', 'клик или s, затем Enter · для done/cancel нужна причина');
     statusPanel.appendChild(closeHint);
     els.issueDetail.appendChild(statusPanel);
+
+    const milestoneWrap = el('div', 'mb-6 flex flex-wrap items-center gap-2 text-xs');
+    const milestoneLabel = el('label', 'text-zinc-500', 'Милстоун');
+    milestoneLabel.htmlFor = 'issue-milestone';
+    milestoneWrap.appendChild(milestoneLabel);
+    const milestoneSelect = el(
+      'select',
+      'bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-sm text-zinc-100 focus:outline-none focus:border-zinc-600 focus-visible:ring-2 focus-visible:ring-sky-500',
+    );
+    milestoneSelect.id = 'issue-milestone';
+    milestoneSelect.title = 'Назначить или снять милстоун';
+    fillMilestoneOptions(milestoneSelect, issue.project, issue.milestone);
+    milestoneSelect.addEventListener('change', () => setIssueMilestone(id, milestoneSelect.value));
+    milestoneWrap.appendChild(milestoneSelect);
+    if (issue.milestone && !isMilestoneOpen(issue.project, issue.milestone)) {
+      milestoneWrap.appendChild(el(
+        'span',
+        'text-amber-400/80',
+        'закрыт · повторно назначить нельзя',
+      ));
+    }
+    els.issueDetail.appendChild(milestoneWrap);
 
     const eventsHeader = el('h3', 'text-sm font-semibold text-zinc-200 mb-2', `События (${eventsData.events.length})`);
     els.issueDetail.appendChild(eventsHeader);
@@ -957,6 +1176,7 @@ function openNewIssueModal() {
   if (!els.newProject.value && projects[0]) {
     els.newProject.value = projects[0].key;
   }
+  fillMilestoneOptions(els.newMilestone, els.newProject.value);
   els.newTitle.value = '';
   els.newBody.value = '';
   els.newPriority.value = '2';
@@ -996,6 +1216,7 @@ async function submitNewIssue(e) {
     priority: Number(els.newPriority.value),
     labels,
     ref: els.newRef.value.trim() || null,
+    milestone: els.newMilestone.value || null,
   };
   try {
     const issue = await api('/api/issues', { method: 'POST', body: JSON.stringify(body) });
@@ -1011,6 +1232,9 @@ els.newIssueBtn.addEventListener('click', openNewIssueModal);
 els.newCancel.addEventListener('click', closeNewIssueModal);
 els.newIssueOverlay.addEventListener('click', closeNewIssueModal);
 els.newIssueForm.addEventListener('submit', submitNewIssue);
+els.newProject.addEventListener('change', () => {
+  fillMilestoneOptions(els.newMilestone, els.newProject.value);
+});
 
 els.newIssueModal.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
@@ -1122,6 +1346,13 @@ els.labelFilter.addEventListener('input', (e) => {
 
 els.sort.addEventListener('change', (e) => {
   state.sort = e.target.value;
+  state.cursor = null;
+  state.selectedIndex = -1;
+  renderIssueList();
+});
+
+els.milestoneFilter.addEventListener('change', (e) => {
+  state.milestone = e.target.value;
   state.cursor = null;
   state.selectedIndex = -1;
   renderIssueList();

@@ -54,6 +54,7 @@
       <div id="filters" class="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-zinc-800">
         <div id="status-chips" class="flex flex-wrap gap-2"></div>
         <div class="flex items-center gap-2 ml-auto">
+          <select id="milestone-filter" class="hidden bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-sm text-zinc-100 focus:outline-none focus:border-zinc-600 focus-visible:ring-2 focus-visible:ring-sky-500" title="Фильтр по милстоуну" aria-label="Фильтр по милстоуну"></select>
           <input id="label-filter" type="search" placeholder="метка" class="w-28 bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-600 focus-visible:ring-2 focus-visible:ring-sky-500" title="Фильтр по метке" aria-label="Фильтр по метке">
           <select id="sort" class="bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-sm text-zinc-100 focus:outline-none focus:border-zinc-600 focus-visible:ring-2 focus-visible:ring-sky-500" title="Сортировка" aria-label="Сортировка">
             <option value="pri">приоритет</option>
@@ -84,6 +85,10 @@
           <div>
             <label for="new-project" class="block text-xs text-zinc-400 mb-1">Проект</label>
             <select id="new-project" name="project" class="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-sm text-zinc-100 focus:outline-none focus:border-zinc-600"></select>
+          </div>
+          <div>
+            <label for="new-milestone" class="block text-xs text-zinc-400 mb-1">Милстоун</label>
+            <select id="new-milestone" name="milestone" class="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-sm text-zinc-100 focus:outline-none focus:border-zinc-600"></select>
           </div>
           <div>
             <label for="new-title" class="block text-xs text-zinc-400 mb-1">Заголовок</label>
