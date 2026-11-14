@@ -92,6 +92,7 @@ export function run(ctx) {
       projects: report.projects,
       issues: report.issues,
       events: report.events,
+      canon: report.canon,
     });
     return 0;
   }

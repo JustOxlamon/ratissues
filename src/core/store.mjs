@@ -17,6 +17,8 @@ import {
 } from './db.mjs';
 import { appendEvent, listEvents, resolveActor } from './events.mjs';
 import {
+  CANON_SELECT,
+  formatCanonId,
   formatIssueId,
   getProject,
   ISSUE_SELECT,
@@ -25,9 +27,12 @@ import {
   MILESTONE_STATES,
   normalizeMilestoneName,
   normalizeProjectKey,
+  parseCanonRef,
+  resolveCanon,
   resolveIssue,
   resolveMilestone,
   resolveProject,
+  serializeCanon,
   serializeEvent,
   serializeIssue,
   serializeMilestone,
@@ -961,6 +966,357 @@ export function updateMilestone(wrapper, {
 }
 
 /**
+ * Канон-правило: актуальное решение проекта из развилки («делай так / не делай
+ * так»). Набор записей проекта, как милстоуны: собственных событий в events
+ * не пишет, аудит — в полях записи. Публичный id — KEY-C{n} (num по проекту);
+ * нумерация — BEGIN IMMEDIATE → max(num)+1 → insert → commit (как у задач).
+ * Создаёт активное правило; `--supersedes` одной транзакцией дополнительно
+ * отмечает заменяемое правило как repealed («заменено правилом KEY-Cn»).
+ * @param {{db: import('node:sqlite').DatabaseSync}} wrapper
+ * @param {{
+ *   project?: string|null,
+ *   projectKey?: string|null,
+ *   title: string,
+ *   body?: string,
+ *   priority?: number|string|null,
+ *   labels?: string[]|string|null,
+ *   source?: string|null,
+ *   supersedes?: string|null,
+ *   actor?: string,
+ *   cwd?: string,
+ *   env?: NodeJS.ProcessEnv
+ * }} input
+ * @returns {object} публичное представление (serializeCanon)
+ * @throws {UsageError|NotFoundError|ConflictError}
+ */
+export function createCanon(wrapper, {
+  project = null,
+  projectKey = null,
+  title,
+  body = '',
+  priority = null,
+  labels = null,
+  source = null,
+  supersedes = null,
+  actor,
+  cwd,
+  env = process.env,
+} = {}) {
+  ensureInitialized(wrapper);
+  const ruleTitle = normalizeCanonTitle(title);
+  const ruleBody = normalizeBody(body);
+  const rulePriority = normalizePriority(priority);
+  const ruleLabels = normalizeLabels(labels);
+  const eventActor = resolveActor(actor, env);
+  const db = unwrapDb(wrapper);
+
+  return transaction(wrapper, () => {
+    const projectRow = resolveProject(db, {
+      project: projectKey ?? project,
+      cwd: cwd ?? process.cwd(),
+      env,
+    });
+    const sourceRef = resolveSourceIssue(db, projectRow.key, source);
+    const supersedesInfo = resolveCanonSupersedes(db, projectRow.key, supersedes);
+
+    const maxRow = db
+      .prepare('SELECT MAX(num) AS max_num FROM canon WHERE project_key = ?')
+      .get(projectRow.key);
+    const num = Number(maxRow?.max_num ?? 0) + 1;
+    const now = Date.now();
+
+    const info = db
+      .prepare(
+        `INSERT INTO canon(
+           project_key, num, title, body, status, priority, labels,
+           source_issue, supersedes_id, created_at, updated_at,
+           repealed_at, repeal_reason, created_by, repealed_by, meta
+         ) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, '{}')`,
+      )
+      .run(
+        projectRow.key,
+        num,
+        ruleTitle,
+        ruleBody,
+        rulePriority,
+        JSON.stringify(ruleLabels),
+        sourceRef,
+        supersedesInfo?.id ?? null,
+        now,
+        now,
+        eventActor,
+      );
+
+    const ruleRow = db.prepare(`${CANON_SELECT} WHERE c.id = ?`).get(Number(info.lastInsertRowid));
+
+    // Авто-repeal заменяемого правила той же транзакцией.
+    if (supersedesInfo) {
+      const newId = formatCanonId(ruleRow);
+      const meta = parseJsonObject(supersedesInfo.meta);
+      meta.superseded_by = newId;
+      db.prepare(
+        `UPDATE canon
+         SET status = 'repealed', repealed_at = ?, repeal_reason = ?, repealed_by = ?,
+             updated_at = ?, meta = ?
+         WHERE id = ?`,
+      ).run(now, `заменено правилом ${newId}`, eventActor, now, JSON.stringify(meta), supersedesInfo.id);
+    }
+
+    return serializeCanon(ruleRow);
+  });
+}
+
+/**
+ * Канон-правило по ссылке (KEY-C1 | C1 | голое число в проекте проекта).
+ * @param {{db: import('node:sqlite').DatabaseSync}} wrapper
+ * @param {string|number} ref
+ * @param {{projectKey?: string|null}} [options]
+ * @returns {object}
+ * @throws {NotFoundError|UsageError}
+ */
+export function getCanon(wrapper, ref, { projectKey = null } = {}) {
+  ensureInitialized(wrapper);
+  return serializeCanon(resolveCanon(wrapper, { ref, projectKey }));
+}
+
+/**
+ * Правка полей канон-правила (title/body/priority/labels). Событий не пишет,
+ * обновляет updated_at. Правка отменённого правила разрешена: repeal-поля
+ * остаются до reactivate.
+ * @param {{db: import('node:sqlite').DatabaseSync}} wrapper
+ * @param {{
+ *   ref: string|number,
+ *   title?: string,
+ *   body?: string,
+ *   priority?: number|string,
+ *   labels?: string[]|string|{add?:string[],remove?:string[]},
+ *   projectKey?: string|null,
+ *   actor?: string,
+ *   env?: NodeJS.ProcessEnv
+ * }} input
+ * @returns {object}
+ * @throws {UsageError|NotFoundError}
+ */
+export function updateCanon(wrapper, {
+  ref,
+  title,
+  body,
+  priority,
+  labels,
+  projectKey = null,
+  actor,
+  env = process.env,
+} = {}) {
+  ensureInitialized(wrapper);
+  const db = unwrapDb(wrapper);
+
+  return transaction(wrapper, () => {
+    const ruleRow = resolveCanon(wrapper, { ref, projectKey });
+    const current = serializeCanon(ruleRow);
+    const sets = [];
+    const params = [];
+
+    if (title !== undefined) {
+      const value = normalizeCanonTitle(title);
+      if (value !== current.title) {
+        sets.push('title = ?');
+        params.push(value);
+      }
+    }
+    if (body !== undefined) {
+      const value = normalizeBody(body);
+      if (value !== current.body) {
+        sets.push('body = ?');
+        params.push(value);
+      }
+    }
+    if (priority !== undefined) {
+      const value = normalizePriority(priority);
+      if (value !== current.priority) {
+        sets.push('priority = ?');
+        params.push(value);
+      }
+    }
+    if (labels !== undefined) {
+      const value = applyLabelChange(current.labels, labels);
+      if (!sameStringArray(value, current.labels)) {
+        sets.push('labels = ?');
+        params.push(JSON.stringify(value));
+      }
+    }
+
+    if (sets.length === 0) return current;
+
+    sets.push('updated_at = ?');
+    params.push(Date.now(), Number(ruleRow.id));
+    db.prepare(`UPDATE canon SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+
+    return serializeCanon(resolveCanon(wrapper, { ref: formatCanonId(ruleRow), projectKey: ruleRow.project_key }));
+  });
+}
+
+/**
+ * Отменяет канон-правило (status=repealed, repealed_at/by, reason). Повтор —
+ * no-op (как close у милстоуна). Удаления нет.
+ * @param {{db: import('node:sqlite').DatabaseSync}} wrapper
+ * @param {{ref: string|number, reason?: string|null, projectKey?: string|null, actor?: string, env?: NodeJS.ProcessEnv}} input
+ * @returns {object}
+ * @throws {NotFoundError|UsageError}
+ */
+export function repealCanon(wrapper, { ref, reason = null, projectKey = null, actor, env = process.env } = {}) {
+  ensureInitialized(wrapper);
+  const eventActor = resolveActor(actor, env);
+  const db = unwrapDb(wrapper);
+
+  return transaction(wrapper, () => {
+    const ruleRow = resolveCanon(wrapper, { ref, projectKey });
+    const current = serializeCanon(ruleRow);
+    if (current.status === 'repealed') return current;
+
+    const now = Date.now();
+    const repealReason = normalizeOptionalText(reason, 'Причина');
+    db.prepare(
+      `UPDATE canon
+       SET status = 'repealed', repealed_at = ?, repeal_reason = ?, repealed_by = ?, updated_at = ?
+       WHERE id = ?`,
+    ).run(now, repealReason, eventActor, now, Number(ruleRow.id));
+
+    return serializeCanon(resolveCanon(wrapper, { ref: formatCanonId(ruleRow), projectKey: ruleRow.project_key }));
+  });
+}
+
+/**
+ * Возвращает отменённое правило в active, очищая repealed-поля. Повтор — no-op.
+ * @param {{db: import('node:sqlite').DatabaseSync}} wrapper
+ * @param {{ref: string|number, projectKey?: string|null, actor?: string, env?: NodeJS.ProcessEnv}} input
+ * @returns {object}
+ * @throws {NotFoundError|UsageError}
+ */
+export function reactivateCanon(wrapper, { ref, projectKey = null, actor, env = process.env } = {}) {
+  ensureInitialized(wrapper);
+  const db = unwrapDb(wrapper);
+
+  return transaction(wrapper, () => {
+    const ruleRow = resolveCanon(wrapper, { ref, projectKey });
+    const current = serializeCanon(ruleRow);
+    if (current.status === 'active') return current;
+
+    const now = Date.now();
+    db.prepare(
+      `UPDATE canon
+       SET status = 'active', repealed_at = NULL, repeal_reason = NULL, repealed_by = NULL, updated_at = ?
+       WHERE id = ?`,
+    ).run(now, Number(ruleRow.id));
+
+    return serializeCanon(resolveCanon(wrapper, { ref: formatCanonId(ruleRow), projectKey: ruleRow.project_key }));
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Канон: помощники
+
+function normalizeCanonTitle(value) {
+  const title = requireNonEmptyString(value, 'Заголовок правила');
+  assertTextSize(title, 'Заголовок правила');
+  return title;
+}
+
+/**
+ * Источник развилки: строка KEY-NUM, задача должна существовать в проекте
+ * правила. Возвращает канонический вид (uppercase) или null.
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {string} projectKey
+ * @param {unknown} value
+ * @returns {string|null}
+ * @throws {UsageError} invalid_source
+ * @throws {NotFoundError} source_issue_not_found
+ */
+function resolveSourceIssue(db, projectKey, value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string') {
+    throw new UsageError('Источник: ожидается KEY-NUM.', { code: 'invalid_source' });
+  }
+  const text = value.trim();
+  if (text === '') return null;
+
+  const match = /^([A-Za-z0-9]{2,10})-(\d+)$/i.exec(text);
+  if (!match || Number(match[2]) <= 0) {
+    throw new UsageError(`Источник «${value}»: ожидается KEY-NUM (например RAT-7).`, {
+      code: 'invalid_source',
+    });
+  }
+  const sourceKey = normalizeProjectKey(match[1]);
+  if (sourceKey !== projectKey) {
+    throw new UsageError(`Источник ${text} из другого проекта (${projectKey}), чем правило.`, {
+      code: 'invalid_source',
+    });
+  }
+  const issue = db
+    .prepare(`${ISSUE_SELECT} WHERE i.project_key = ? AND i.num = ?`)
+    .get(sourceKey, Number(match[2]));
+  if (!issue) {
+    throw new NotFoundError(`Задача-источник ${text} не найдена.`, {
+      code: 'source_issue_not_found',
+      hint: 'Проверьте список: rat ls',
+    });
+  }
+  return formatIssueId(issue);
+}
+
+/**
+ * Цель --supersedes: правило того же проекта, активное. Возвращает {id, meta}
+ * для авто-repeal или null.
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {string} projectKey
+ * @param {unknown} value
+ * @returns {{id:number, meta:string}|null}
+ * @throws {UsageError} invalid_supersedes
+ * @throws {NotFoundError} canon_not_found
+ * @throws {ConflictError} canon_not_active
+ */
+function resolveCanonSupersedes(db, projectKey, value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string') {
+    throw new UsageError('--supersedes: ожидается KEY-Cn.', { code: 'invalid_supersedes' });
+  }
+  const text = value.trim();
+  if (text === '') return null;
+
+  const parsed = parseCanonRef(text, { projectKey });
+  if (parsed.projectKey !== projectKey) {
+    throw new UsageError(
+      `--supersedes: правило ${text} из другого проекта, чем ${projectKey}.`,
+      { code: 'invalid_supersedes' },
+    );
+  }
+  const row = db
+    .prepare(`${CANON_SELECT} WHERE c.project_key = ? AND c.num = ?`)
+    .get(projectKey, parsed.num);
+  if (!row) {
+    throw new NotFoundError(`Канон-правило ${formatCanonId(parsed)} не найдено.`, {
+      code: 'canon_not_found',
+      hint: 'Посмотрите правила: rat canon ls',
+    });
+  }
+  if (row.status !== 'active') {
+    throw new ConflictError(
+      `Канон-правило ${formatCanonId(row)} не активно — заменять можно только активное.`,
+      { code: 'canon_not_active', hint: 'Посмотрите все правила: rat canon ls --state all' },
+    );
+  }
+  return { id: Number(row.id), meta: row.meta };
+}
+
+function parseJsonObject(raw) {
+  try {
+    const parsed = JSON.parse(raw ?? '{}');
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
  * Архивирует проект (archived_at). Задачи проекта не трогаются: архив только
  * прячет проект из дефолтных списков. Повторная архивация → ConflictError.
  * @param {{db: import('node:sqlite').DatabaseSync}} wrapper
@@ -1433,6 +1789,33 @@ export function doctor(wrapper) {
         id: 'milestones',
         ok: false,
         message: `Не удалось проверить милстоуны: ${err?.message ?? err}`,
+      });
+    }
+  }
+
+  const canonTable = safeTableExists(db, 'canon');
+  if (!canonTable) {
+    checks.push({
+      id: 'canon',
+      ok: false,
+      message: 'Нет таблицы canon — выполните rat init',
+    });
+  } else {
+    try {
+      const total = Number(db.prepare('SELECT COUNT(*) AS n FROM canon').get().n);
+      const active = Number(
+        db.prepare("SELECT COUNT(*) AS n FROM canon WHERE status = 'active'").get().n,
+      );
+      checks.push({
+        id: 'canon',
+        ok: true,
+        message: `Канон: ${total} (active ${active})`,
+      });
+    } catch (err) {
+      checks.push({
+        id: 'canon',
+        ok: false,
+        message: `Не удалось проверить канон: ${err?.message ?? err}`,
       });
     }
   }

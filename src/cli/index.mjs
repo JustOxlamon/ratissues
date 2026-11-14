@@ -8,6 +8,7 @@ import {
 import { maybeBackup } from '../core/backup.mjs';
 import * as addCommand from './commands/add.mjs';
 import * as backupCommand from './commands/backup.mjs';
+import * as canonCommand from './commands/canon.mjs';
 import * as claimCommand from './commands/claim.mjs';
 import * as commentCommand from './commands/comment.mjs';
 import * as doctorCommand from './commands/doctor.mjs';
@@ -30,6 +31,7 @@ const COMMAND_MODULES = [
   backupCommand,
   projectCommand,
   milestoneCommand,
+  canonCommand,
   addCommand,
   lsCommand,
   showCommand,

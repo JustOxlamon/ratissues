@@ -11,6 +11,7 @@ import { buildExport } from '../core/export.mjs';
 import { listEvents, listEventsSinceId } from '../core/events.mjs';
 import {
   getStats,
+  listCanon,
   listLog,
   listMilestones,
   searchIssues,
@@ -18,11 +19,15 @@ import {
 } from '../core/query.mjs';
 import {
   addComment,
+  createCanon,
   createIssue,
   createMilestone,
   createProject,
   getIssue,
   listProjectsWithCounts,
+  reactivateCanon,
+  repealCanon,
+  updateCanon,
   updateIssue,
   updateMilestone,
 } from '../core/store.mjs';
@@ -141,6 +146,18 @@ async function routeGet(wrapper, req, res, url) {
     return;
   }
 
+  if (pathname === '/api/canon') {
+    const canon = listCanon(wrapper, {
+      project: url.searchParams.get('project') ?? null,
+      state: url.searchParams.get('state') ?? 'active',
+      label: url.searchParams.get('label') ?? null,
+      q: url.searchParams.get('q') ?? null,
+      includeArchived: parseBoolean(url.searchParams.get('all')),
+    });
+    sendJson(res, { canon });
+    return;
+  }
+
   if (pathname === '/api/stats') {
     sendJson(res, getStats(wrapper));
     return;
@@ -212,6 +229,7 @@ async function routeWrite(wrapper, req, res, url) {
   const issueMatch = /^\/api\/issues\/([^/]+)$/.exec(pathname);
   const commentMatch = /^\/api\/issues\/([^/]+)\/comments$/.exec(pathname);
   const milestoneMatch = /^\/api\/milestones\/([^/]+)$/.exec(pathname);
+  const canonMatch = /^\/api\/canon\/([^/]+)$/.exec(pathname);
 
   // POST /api/projects
   if (pathname === '/api/projects' && method === 'POST') {
@@ -236,6 +254,91 @@ async function routeWrite(wrapper, req, res, url) {
       dueAt: body.due_at ?? null,
     });
     sendJson(res, milestone, 201);
+    return;
+  }
+
+  // POST /api/canon
+  if (pathname === '/api/canon' && method === 'POST') {
+    const body = await readJsonBody(req);
+    const rule = createCanon(wrapper, {
+      project: body.project ?? null,
+      title: body.title,
+      body: body.body ?? '',
+      priority: body.priority ?? null,
+      labels: body.labels ?? null,
+      source: body.source ?? null,
+      supersedes: body.supersedes ?? null,
+      actor: body.actor ?? 'web',
+    });
+    sendJson(res, rule, 201);
+    return;
+  }
+
+  // PATCH /api/canon/:ref?project  (state = repealed|active и/или правки полей)
+  if (canonMatch && method === 'PATCH') {
+    const body = await readJsonBody(req);
+    const project = url.searchParams.get('project') ?? body.project;
+    if (project === null || project === undefined || String(project).trim() === '') {
+      throw new UsageError('PATCH /api/canon: нужен project (query или body).', {
+        code: 'invalid_project',
+      });
+    }
+    let ref;
+    try {
+      ref = decodeURIComponent(canonMatch[1]);
+    } catch {
+      throw new UsageError('Некорректное имя канон-правила в пути.', {
+        code: 'invalid_canon_ref',
+        hint: 'Посмотрите правила: rat canon ls',
+      });
+    }
+    const scope = project;
+    const actor = body.actor ?? 'web';
+    const hasFields = ['title', 'body', 'priority', 'labels'].some(
+      (field) => body[field] !== undefined,
+    );
+    const stateGiven = body.state !== undefined && body.state !== null && String(body.state).trim() !== '';
+
+    let rule;
+    if (stateGiven) {
+      const state = String(body.state).trim().toLowerCase();
+      if (state === 'repealed') {
+        rule = repealCanon(wrapper, { ref, reason: body.reason ?? null, projectKey: scope, actor });
+      } else if (state === 'active') {
+        rule = reactivateCanon(wrapper, { ref, projectKey: scope, actor });
+      } else {
+        throw new UsageError(`Недопустимое состояние «${body.state}». Допустимо: active, repealed.`, {
+          code: 'invalid_state',
+        });
+      }
+      if (hasFields) {
+        rule = updateCanon(wrapper, {
+          ref,
+          title: body.title,
+          body: body.body,
+          priority: body.priority,
+          labels: body.labels,
+          projectKey: scope,
+          actor,
+        });
+      }
+    } else {
+      if (!hasFields) {
+        throw new UsageError('PATCH /api/canon: нет изменений (state или поля).', {
+          code: 'invalid_arguments',
+        });
+      }
+      rule = updateCanon(wrapper, {
+        ref,
+        title: body.title,
+        body: body.body,
+        priority: body.priority,
+        labels: body.labels,
+        projectKey: scope,
+        actor,
+      });
+    }
+    sendJson(res, rule);
     return;
   }
 
@@ -333,6 +436,22 @@ async function routeWrite(wrapper, req, res, url) {
     return;
   }
   if (milestoneMatch && method !== 'PATCH') {
+    sendError(
+      res,
+      new UsageError(`Метод ${method} не поддерживается.`, { code: 'method_not_allowed' }),
+      405,
+    );
+    return;
+  }
+  if (pathname === '/api/canon' && method !== 'POST') {
+    sendError(
+      res,
+      new UsageError(`Метод ${method} не поддерживается.`, { code: 'method_not_allowed' }),
+      405,
+    );
+    return;
+  }
+  if (canonMatch && method !== 'PATCH') {
     sendError(
       res,
       new UsageError(`Метод ${method} не поддерживается.`, { code: 'method_not_allowed' }),

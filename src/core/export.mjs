@@ -8,6 +8,7 @@ import {
   getProject,
   ISSUE_SELECT,
   ISSUE_STATUSES,
+  listCanon,
   listMilestones,
   listProjects,
   normalizeProjectKey,
@@ -226,6 +227,7 @@ function buildMarkdown(wrapper, scope) {
     projects: scope.projects.length,
     issues,
     events,
+    canon: 0,
   };
 }
 
@@ -243,12 +245,14 @@ function renderProject(wrapper, project, activeRows, deferredRows, closedRows) {
   const openSection = renderSection(wrapper, '## Открытые', activeRows);
   const deferredSection = renderSection(wrapper, '## Отложенные', deferredRows);
   const closedSection = renderSection(wrapper, '## Закрытые', closedRows);
+  const canonSection = renderCanon(wrapper, project);
   const milestonesSection = renderMilestones(wrapper, project);
 
   return {
     content: [
       `# ${project.key} — ${project.name}${archived}`,
       summary,
+      ...(canonSection === null ? [] : [canonSection]),
       ...(milestonesSection === null ? [] : [milestonesSection]),
       openSection.content,
       deferredSection.content,
@@ -269,6 +273,28 @@ function renderMilestones(wrapper, project) {
     lines.push(
       `- **${milestone.name}** · ${milestone.state} · ${progress.done}/${progress.total} (${progress.percent}%)${due}`,
     );
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Блок «## Канон» в md: только активные правила, без дат (детерминизм для git).
+ * Источник и тело — необязательны и показываются при наличии.
+ * @param {{db: import('node:sqlite').DatabaseSync}} wrapper
+ * @param {object} project
+ * @returns {string|null}
+ */
+function renderCanon(wrapper, project) {
+  const rules = listCanon(wrapper, { project: project.key, state: 'active' });
+  if (rules.length === 0) return null;
+
+  const lines = ['## Канон'];
+  for (const rule of rules) {
+    lines.push(`- **${rule.id}** · [p${rule.priority}] · ${rule.title}`);
+    if (rule.source_issue) lines.push(`  источник: ${rule.source_issue}`);
+    if (rule.body.trim() !== '') {
+      lines.push(`  ${rule.body.trim().replace(/\n+/g, '\n  ')}`);
+    }
   }
   return lines.join('\n');
 }
@@ -357,13 +383,33 @@ function describeEvent(event) {
 function buildJsonl(wrapper, scope, { events, limit }) {
   const db = unwrapDb(wrapper);
   const projectKeys = scope.projects.map((project) => project.key);
+  const lines = [];
+
+  // Канон — всегда, первыми (детерминированно: проект ASC, num ASC). Поле type
+  // различает записи канона от задач и событий.
+  let canon = 0;
+  if (projectKeys.length > 0) {
+    const canonRows = scope.projects
+      .map((project) => listCanon(wrapper, { project: project.key, state: 'all', includeArchived: true }))
+      .flat()
+      .sort((a, b) => (a.project === b.project ? a.num - b.num : a.project < b.project ? -1 : 1));
+    for (const rule of canonRows) {
+      lines.push(JSON.stringify({ type: 'canon', ...rule }));
+      canon += 1;
+    }
+  }
 
   if (projectKeys.length === 0) {
-    return { content: '', projects: 0, issues: 0, events: 0 };
+    return {
+      content: lines.length ? `${lines.join('\n')}\n` : '',
+      projects: 0,
+      issues: 0,
+      events: 0,
+      canon,
+    };
   }
 
   const placeholders = projectKeys.map(() => '?').join(', ');
-  const lines = [];
 
   if (events) {
     const rows = db
@@ -380,7 +426,8 @@ function buildJsonl(wrapper, scope, { events, limit }) {
       content: lines.length ? `${lines.join('\n')}\n` : '',
       projects: projectKeys.length,
       issues: 0,
-      events: lines.length,
+      events: rows.length,
+      canon,
     };
   }
 
@@ -396,8 +443,9 @@ function buildJsonl(wrapper, scope, { events, limit }) {
   return {
     content: lines.length ? `${lines.join('\n')}\n` : '',
     projects: projectKeys.length,
-    issues: lines.length,
+    issues: rows.length,
     events: 0,
+    canon,
   };
 }
 
