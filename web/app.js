@@ -33,6 +33,7 @@ const state = {
   stats: null,
   projects: [],
   milestones: [],
+  canon: [],
   selectedIndex: -1,
 };
 
@@ -54,6 +55,7 @@ const els = {
   issueList: $('#issue-list'),
   issueDetail: $('#issue-detail'),
   logView: $('#log-view'),
+  canonView: $('#canon-view'),
   drawer: $('#drawer'),
   drawerOverlay: $('#drawer-overlay'),
   menuToggle: $('#menu-toggle'),
@@ -203,12 +205,13 @@ function parseHash() {
   if (prefix === 'project' && rest[0]) return { view: 'project', project: rest[0] };
   if (prefix === 'issue') return { view: 'issue', id: rest.join('/') };
   if (prefix === 'log') return { view: 'log' };
+  if (prefix === 'canon' && rest[0]) return { view: 'canon', project: rest[0] };
   return { view: 'home' };
 }
 
 function applyRoute() {
   const route = parseHash();
-  const nextProject = route.view === 'project'
+  const nextProject = route.view === 'project' || route.view === 'canon'
     ? route.project
     : route.view === 'home'
       ? null
@@ -233,7 +236,12 @@ async function refreshAll() {
   }
 
   try {
-    await Promise.all([loadProjects(seq), loadStats(seq), loadMilestones(seq)]);
+    await Promise.all([
+      loadProjects(seq),
+      loadStats(seq),
+      loadMilestones(seq),
+      loadCanon(seq),
+    ]);
     if (isStale(seq)) return;
 
     const route = parseHash();
@@ -241,6 +249,8 @@ async function refreshAll() {
       await renderIssueDetail(route.id, seq);
     } else if (route.view === 'log') {
       await renderLog(seq);
+    } else if (route.view === 'canon') {
+      await renderCanon(route.project, seq);
     } else {
       await renderIssueList(seq);
     }
@@ -307,6 +317,7 @@ function renderSidebarList(root, search) {
     root.appendChild(row);
     const milestoneBlock = renderSidebarMilestones(project);
     if (milestoneBlock) root.appendChild(milestoneBlock);
+    root.appendChild(renderSidebarCanon(project));
   }
 }
 
@@ -358,6 +369,25 @@ function renderSidebarMilestones(project) {
   return wrap;
 }
 
+/** Ссылка на панель канона проекта в сайдбаре: «Канон · N» (N активных). */
+function renderSidebarCanon(project) {
+  const activeCount = state.canon
+    .filter((rule) => rule.project === project.key && rule.status === 'active')
+    .length;
+  const active = state.project === project.key && parseHash().view === 'canon';
+  const row = el('a', [
+    'block pl-8 pr-3 py-1 text-[11px] rounded hover:bg-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500',
+    active ? 'bg-zinc-900 text-sky-300' : 'text-zinc-500',
+  ]);
+  row.href = `#/canon/${project.key}`;
+  row.title = 'Канон проекта — актуальные решения («делай так / не делай так»)';
+  const head = el('div', 'flex items-center justify-between gap-2');
+  head.appendChild(el('span', 'truncate text-zinc-300', 'Канон'));
+  head.appendChild(el('span', 'font-mono text-[10px] text-zinc-500 shrink-0', String(activeCount)));
+  row.appendChild(head);
+  return row;
+}
+
 function renderMiniStats(root) {
   clear(root);
   if (!state.stats) return;
@@ -406,6 +436,14 @@ async function loadMilestones(seq) {
   }
 
   renderMilestoneFilter();
+  renderSidebarList(els.projectList, els.projectSearch.value);
+  renderSidebarList(els.drawerProjectList, els.drawerProjectSearch.value);
+}
+
+async function loadCanon(seq) {
+  const data = await api('/api/canon?state=all');
+  if (isStale(seq)) return;
+  state.canon = data.canon;
   renderSidebarList(els.projectList, els.projectSearch.value);
   renderSidebarList(els.drawerProjectList, els.drawerProjectSearch.value);
 }
@@ -1153,6 +1191,251 @@ async function renderLog(seq) {
   } catch (err) {
     if (err.name === 'AbortError') return;
     showError(err.message, () => renderLog());
+  } finally {
+    setVisible(els.loading, false);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Канон (панель проекта)
+// ---------------------------------------------------------------------------
+
+async function submitCanonRule(projectKey, fields) {
+  const title = String(fields.title ?? '').trim();
+  if (!title) throw new Error('Заголовок правила обязателен.');
+  const labelsRaw = String(fields.labels ?? '').trim();
+  const labels = labelsRaw ? labelsRaw.split(',').map((s) => s.trim()).filter(Boolean) : [];
+  const source = String(fields.source ?? '').trim();
+  await api('/api/canon', {
+    method: 'POST',
+    body: JSON.stringify({
+      project: projectKey,
+      title,
+      body: String(fields.body ?? ''),
+      priority: Number(fields.priority ?? 2),
+      labels,
+      source: source || null,
+    }),
+  });
+  await refreshAll();
+}
+
+async function canonRepeal(id, projectKey) {
+  const entered = window.prompt('Причина отмены правила (можно оставить пустой):');
+  if (entered === null) return;
+  try {
+    await api(`/api/canon/${encodeURIComponent(id)}?project=${encodeURIComponent(projectKey)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ state: 'repealed', reason: entered.trim() || null }),
+    });
+    await refreshAll();
+  } catch (err) {
+    showCanonError(err.message);
+  }
+}
+
+async function canonReactivate(id, projectKey) {
+  try {
+    await api(`/api/canon/${encodeURIComponent(id)}?project=${encodeURIComponent(projectKey)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ state: 'active' }),
+    });
+    await refreshAll();
+  } catch (err) {
+    showCanonError(err.message);
+  }
+}
+
+function showCanonError(message) {
+  const existing = $('#canon-error');
+  if (existing) existing.remove();
+  const box = el('div', 'mb-4 p-3 rounded border border-rose-500/30 bg-rose-500/10 text-rose-400 text-sm', `Ошибка: ${message}`);
+  box.id = 'canon-error';
+  els.canonView.insertBefore(box, els.canonView.firstChild);
+}
+
+function canonRuleCard(rule, projectKey) {
+  const card = el('div', 'border border-zinc-800 rounded p-3 bg-zinc-900/20');
+  const head = el('div', 'flex items-center gap-2 flex-wrap text-xs');
+  head.appendChild(el('span', 'font-mono text-zinc-400', rule.id));
+  head.appendChild(el('span', [
+    'px-1.5 py-0.5 rounded border uppercase tracking-wide text-[10px]',
+    rule.status === 'active'
+      ? 'border-sky-500/30 bg-sky-500/10 text-sky-300'
+      : 'border-zinc-700 text-zinc-500',
+  ], rule.status));
+  head.appendChild(el('span', 'text-zinc-500', `p${rule.priority}`));
+  if (rule.labels.length) {
+    for (const label of rule.labels) {
+      head.appendChild(el('span', 'text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-800', label));
+    }
+  }
+  if (rule.source_issue) head.appendChild(el('span', 'text-zinc-500', `источник ${rule.source_issue}`));
+  if (rule.supersedes) head.appendChild(el('span', 'text-zinc-500', `заменяет ${rule.supersedes}`));
+  card.appendChild(head);
+
+  const title = el('div', 'mt-2 text-sm font-medium text-zinc-100');
+  title.textContent = rule.title;
+  card.appendChild(title);
+
+  if (rule.body.trim()) {
+    const body = el('div', 'mt-1 text-xs text-zinc-400 whitespace-pre-wrap');
+    body.textContent = rule.body;
+    card.appendChild(body);
+  }
+
+  if (rule.status === 'repealed') {
+    if (rule.repeal_reason) {
+      card.appendChild(el('div', 'mt-1 text-[11px] text-rose-400', `отменено: ${rule.repeal_reason}`));
+    }
+    const react = el('button', [
+      'mt-2 px-2 py-1 rounded text-xs border border-sky-500/30 bg-sky-500/10 text-sky-300 hover:border-zinc-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500',
+    ], 'вернуть в активные');
+    react.addEventListener('click', () => canonReactivate(rule.id, projectKey));
+    card.appendChild(react);
+  } else {
+    const repeal = el('button', [
+      'mt-2 px-2 py-1 rounded text-xs border border-rose-500/30 bg-rose-500/10 text-rose-400 hover:border-zinc-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500',
+    ], 'отменить');
+    repeal.title = 'Отменить правило (repeal)';
+    repeal.addEventListener('click', () => canonRepeal(rule.id, projectKey));
+    card.appendChild(repeal);
+  }
+  return card;
+}
+
+async function renderCanon(projectKey, seq) {
+  seq = seq ?? nextSeq();
+  setVisible(els.loading, true);
+  setVisible(els.issueList, false);
+  setVisible(els.issueDetail, false);
+  setVisible(els.logView, false);
+  setVisible(els.empty, false);
+  els.issueDetail.className = 'hidden';
+  els.logView.className = 'hidden';
+
+  try {
+    const data = await api(`/api/canon?project=${encodeURIComponent(projectKey)}&state=all`);
+    if (isStale(seq)) return;
+    const active = data.canon.filter((rule) => rule.status === 'active');
+    const repealed = data.canon.filter((rule) => rule.status === 'repealed');
+
+    clear(els.canonView);
+    els.canonView.className = 'max-w-3xl mx-auto';
+
+    const header = el('div', 'border-b border-zinc-800 pb-4 mb-6');
+    header.appendChild(link(
+      `#/project/${projectKey}`,
+      'text-sm text-zinc-500 hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 rounded',
+      '← назад к задачам',
+    ));
+    header.appendChild(el('h2', 'mt-2 text-lg font-semibold text-zinc-100', `Канон · ${projectKey}`));
+    header.appendChild(el('p', 'text-xs text-zinc-500 mt-1', 'Актуальные решения проекта из развилок («делай так / вот так не делай»).'));
+    els.canonView.appendChild(header);
+
+    // Форма добавления правила
+    const canField = (id, label, node) => {
+      const wrap = el('div');
+      const lab = el('label', 'block text-xs text-zinc-400 mb-1', label);
+      lab.htmlFor = `canon-${id}`;
+      wrap.appendChild(lab);
+      node.id = `canon-${id}`;
+      node.className = 'w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-600 focus-visible:ring-2 focus-visible:ring-sky-500';
+      wrap.appendChild(node);
+      return wrap;
+    };
+
+    const form = el('form', 'border border-zinc-800 rounded p-3 bg-zinc-900/20 space-y-2 mb-6');
+    const inputTitle = el('input');
+    inputTitle.type = 'text';
+    inputTitle.required = true;
+    inputTitle.placeholder = 'Правило: «делай так / не делай так»';
+    inputTitle.setAttribute('aria-label', 'Заголовок правила');
+    form.appendChild(canField('title', 'Правило', inputTitle));
+
+    const bodyArea = el('textarea');
+    bodyArea.rows = 2;
+    bodyArea.placeholder = 'Контекст / обоснование развилки';
+    form.appendChild(canField('body', 'Контекст', bodyArea));
+
+    const lowerRow = el('div', 'grid grid-cols-1 sm:grid-cols-2 gap-2');
+    const prioSelect = el('select');
+    for (const [val, label] of [['0', 'p0 · срочно'], ['1', 'p1 · высокий'], ['2', 'p2 · обычный'], ['3', 'p3 · когда-нибудь']]) {
+      const opt = document.createElement('option');
+      opt.value = val;
+      opt.textContent = label;
+      if (val === '2') opt.selected = true;
+      prioSelect.appendChild(opt);
+    }
+    lowerRow.appendChild(canField('priority', 'Приоритет', prioSelect));
+
+    const lowerRight = el('div', 'grid grid-cols-1 sm:grid-cols-2 gap-2');
+    const labelsInput = el('input');
+    labelsInput.type = 'text';
+    labelsInput.placeholder = 'a,b';
+    lowerRight.appendChild(canField('labels', 'Метки', labelsInput));
+    const sourceInput = el('input');
+    sourceInput.type = 'text';
+    sourceInput.placeholder = 'RAT-7';
+    lowerRight.appendChild(canField('source', 'Источник', sourceInput));
+    lowerRow.appendChild(lowerRight);
+    form.appendChild(lowerRow);
+
+    const submitBtn = el('button', [
+      'px-3 py-1.5 rounded text-sm bg-zinc-100 text-zinc-900 hover:bg-zinc-200 font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500',
+    ], 'Добавить правило');
+    submitBtn.type = 'submit';
+    form.appendChild(submitBtn);
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      try {
+        await submitCanonRule(projectKey, {
+          title: inputTitle.value,
+          body: bodyArea.value,
+          priority: prioSelect.value,
+          labels: labelsInput.value,
+          source: sourceInput.value,
+        });
+        inputTitle.value = '';
+        bodyArea.value = '';
+        labelsInput.value = '';
+        sourceInput.value = '';
+      } catch (err) {
+        showCanonError(err.message);
+      }
+    });
+    els.canonView.appendChild(form);
+
+    els.canonView.appendChild(el('h3', 'text-sm font-semibold text-zinc-200 mb-2', `Активные (${active.length})`));
+    if (active.length === 0) {
+      els.canonView.appendChild(el('div', 'text-zinc-500 text-sm mb-4', 'Активных правил нет.'));
+    } else {
+      const activeWrap = el('div', 'space-y-2 mb-6');
+      for (const rule of active) activeWrap.appendChild(canonRuleCard(rule, projectKey));
+      els.canonView.appendChild(activeWrap);
+    }
+
+    // Отменённые — сворачиваемый блок
+    const details = el('details', 'mt-2');
+    const summary = el('summary', 'cursor-pointer text-sm text-zinc-500 hover:text-zinc-300 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 rounded', `Отменённые (${repealed.length})`);
+    details.appendChild(summary);
+    const repWrap = el('div', 'space-y-2 mt-2');
+    if (repealed.length === 0) {
+      repWrap.appendChild(el('div', 'text-zinc-500 text-xs', 'Отменённых правил нет.'));
+    } else {
+      for (const rule of repealed) repWrap.appendChild(canonRuleCard(rule, projectKey));
+    }
+    details.appendChild(repWrap);
+    els.canonView.appendChild(details);
+
+    setVisible(els.canonView, true);
+  } catch (err) {
+    if (err.name === 'AbortError') return;
+    clear(els.canonView);
+    els.canonView.className = 'max-w-3xl mx-auto';
+    els.canonView.appendChild(el('div', 'text-rose-400 text-sm text-center mt-10', `Ошибка: ${err.message}`));
+    setVisible(els.canonView, true);
   } finally {
     setVisible(els.loading, false);
   }
