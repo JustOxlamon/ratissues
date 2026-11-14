@@ -10,7 +10,7 @@ test('init создаёт схему и проект RAT', (t) => {
   const wrapper = box.open();
 
   const report = initDatabase(wrapper);
-  assert.equal(report.schemaVersion, 3);
+  assert.equal(report.schemaVersion, 4);
   assert.equal(report.projectCreated, true);
   assert.equal(report.defaultProject, 'RAT');
 
@@ -18,12 +18,12 @@ test('init создаёт схему и проект RAT', (t) => {
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
     .all()
     .map((row) => row.name);
-  for (const name of ['meta', 'projects', 'issues', 'events', 'milestones']) {
+  for (const name of ['meta', 'projects', 'issues', 'events', 'milestones', 'canon']) {
     assert.ok(tables.includes(name), `нет таблицы ${name}`);
   }
 
   const version = wrapper.db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get();
-  assert.equal(version.value, '3');
+  assert.equal(version.value, '4');
   assert.equal(wrapper.db.prepare('SELECT COUNT(*) AS n FROM projects').get().n, 1);
   assert.equal(wrapper.db.prepare("SELECT name FROM projects WHERE key = 'RAT'").get().name, 'RatIssues');
   assert.equal(wrapper.db.prepare('SELECT COUNT(*) AS n FROM issues').get().n, 0);
@@ -48,12 +48,12 @@ test('прямой вызов migrate тоже идемпотентен', (t) =>
 
   const first = migrate(wrapper);
   const second = migrate(wrapper);
-  assert.equal(first.schemaVersion, 3);
-  assert.equal(second.schemaVersion, 3);
-  assert.equal(wrapper.db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value, '3');
+  assert.equal(first.schemaVersion, 4);
+  assert.equal(second.schemaVersion, 4);
+  assert.equal(wrapper.db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value, '4');
 });
 
-test('миграция v1→v3: данные и FTS сохраняются, появляются deferred и милстоуны', (t) => {
+test('миграция v1→v4: данные и FTS сохраняются, появляются deferred, милстоуны и канон', (t) => {
   const box = createSandbox(t, 'rat-init-');
   const wrapper = box.open();
 
@@ -90,10 +90,10 @@ test('миграция v1→v3: данные и FTS сохраняются, по
   seedIssue(wrapper.db, { num: 1, title: 'Старая задача' });
 
   const report = migrate(wrapper);
-  assert.equal(report.schemaVersion, 3);
+  assert.equal(report.schemaVersion, 4);
   assert.equal(
     wrapper.db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
-    '3',
+    '4',
   );
 
   // Данные пережили перестройку.
@@ -126,9 +126,12 @@ test('миграция v1→v3: данные и FTS сохраняются, по
     wrapper.db.prepare('SELECT milestone_id FROM issues WHERE num = 1').get().milestone_id,
     null,
   );
+
+  // v4: таблица канона добавилась аддитивно, без пересборки.
+  assert.ok(tables.includes('canon'), 'нет таблицы canon');
 });
 
-test('миграция v2→v3: аддитивна, данные целы, FK на milestones работает', (t) => {
+test('миграция v2→v4: аддитивна, данные целы, FK на milestones работает', (t) => {
   const box = createSandbox(t, 'rat-init-');
   const wrapper = box.open();
 
@@ -174,7 +177,7 @@ test('миграция v2→v3: аддитивна, данные целы, FK н
   });
 
   const report = migrate(wrapper);
-  assert.equal(report.schemaVersion, 3);
+  assert.equal(report.schemaVersion, 4);
 
   const issue = wrapper.db
     .prepare('SELECT id, title, status, labels, created_at, updated_at, milestone_id FROM issues WHERE id = ?')
@@ -229,8 +232,101 @@ test('миграция v2→v3: аддитивна, данные целы, FK н
     /UNIQUE constraint failed/,
   );
 
-  // Повторный migrate не ломается и остаётся на v3.
-  assert.equal(migrate(wrapper).schemaVersion, 3);
+  // Повторный migrate не ломается и остаётся на v4.
+  assert.equal(migrate(wrapper).schemaVersion, 4);
+});
+
+test('миграция v3→v4: аддитивна, canon создаётся, милстоуны и данные целы', (t) => {
+  const box = createSandbox(t, 'rat-init-');
+  const wrapper = box.open();
+
+  // Ручная схема v3 (с milestones и milestone_id), без canon.
+  wrapper.db.exec(`
+    CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+    INSERT INTO meta(key, value) VALUES ('schema_version', '3');
+    CREATE TABLE projects (
+      key TEXT PRIMARY KEY, name TEXT NOT NULL, root_path TEXT,
+      color TEXT NOT NULL DEFAULT 'zinc', created_at INTEGER NOT NULL, archived_at INTEGER
+    );
+    INSERT INTO projects(key, name, root_path, color, created_at)
+      VALUES ('RAT', 'RatIssues', NULL, 'lime', 0);
+    CREATE TABLE issues (
+      id INTEGER PRIMARY KEY, project_key TEXT NOT NULL REFERENCES projects(key),
+      num INTEGER NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'open'
+        CHECK (status IN ('open','doing','blocked','deferred','done','cancelled')),
+      priority INTEGER NOT NULL DEFAULT 2 CHECK (priority BETWEEN 0 AND 3),
+      labels TEXT NOT NULL DEFAULT '[]', assignee TEXT, ref TEXT,
+      milestone_id INTEGER REFERENCES milestones(id),
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+      closed_at INTEGER, close_reason TEXT, meta TEXT NOT NULL DEFAULT '{}',
+      UNIQUE (project_key, num)
+    );
+    CREATE TABLE events (
+      id INTEGER PRIMARY KEY, issue_id INTEGER NOT NULL REFERENCES issues(id),
+      ts INTEGER NOT NULL, actor TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('created','status','comment','edit','link','claim')),
+      data TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE TABLE milestones (
+      id INTEGER PRIMARY KEY, project_key TEXT NOT NULL REFERENCES projects(key),
+      name TEXT NOT NULL, name_key TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
+      due_at INTEGER, state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open','closed')),
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+      closed_at INTEGER, meta TEXT NOT NULL DEFAULT '{}',
+      UNIQUE (project_key, name_key)
+    );
+    CREATE INDEX idx_milestones_project_state ON milestones(project_key, state, due_at);
+  `);
+  const now = Date.now();
+  const milestone = wrapper.db
+    .prepare(
+      `INSERT INTO milestones(project_key, name, name_key, created_at, updated_at)
+       VALUES ('RAT', 'v1.0', 'v1.0', ?, ?)`,
+    )
+    .run(now, now);
+  seedIssue(wrapper.db, {
+    num: 1,
+    title: 'Задача из v3',
+    milestoneId: Number(milestone.lastInsertRowid),
+  });
+
+  const report = migrate(wrapper);
+  assert.equal(report.schemaVersion, 4);
+  assert.equal(
+    wrapper.db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
+    '4',
+  );
+
+  const tables = wrapper.db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+    .all()
+    .map((row) => row.name);
+  assert.ok(tables.includes('canon'), 'нет таблицы canon');
+  assert.ok(tables.includes('milestones'), 'пропала таблица milestones');
+
+  const canonColumns = wrapper.db
+    .prepare('PRAGMA table_info(canon)')
+    .all()
+    .map((row) => row.name);
+  for (const column of [
+    'id', 'project_key', 'num', 'title', 'body', 'status', 'priority', 'labels',
+    'source_issue', 'supersedes_id', 'created_at', 'updated_at', 'repealed_at',
+    'repeal_reason', 'created_by', 'repealed_by', 'meta',
+  ]) {
+    assert.ok(canonColumns.includes(column), `нет колонки canon.${column}`);
+  }
+
+  // Данные v3 целы: задача и привязка к милстоуну.
+  const issue = wrapper.db
+    .prepare('SELECT title, milestone_id FROM issues WHERE num = 1')
+    .get();
+  assert.equal(issue.title, 'Задача из v3');
+  assert.equal(issue.milestone_id, Number(milestone.lastInsertRowid));
+  assert.equal(
+    wrapper.db.prepare("SELECT name FROM milestones WHERE name_key = 'v1.0'").get().name,
+    'v1.0',
+  );
 });
 
 test('на коннекте включены WAL, busy_timeout, synchronous=NORMAL, foreign_keys', (t) => {
@@ -277,7 +373,7 @@ test('doctor на здоровой базе → ok', (t) => {
 
   const report = doctor(wrapper);
   assert.equal(report.ok, true, JSON.stringify(report.checks));
-  assert.equal(report.schemaVersion, 3);
+  assert.equal(report.schemaVersion, 4);
   assert.equal(report.journalMode, 'wal');
   assert.equal(report.counts.projects, 1);
   assert.equal(report.checks.length >= 4, true);
@@ -290,7 +386,7 @@ test('CLI: init дважды подряд, вторая база уже с пр�
   assert.equal(first.code, 0, first.stderr);
   const firstReport = JSON.parse(first.stdout);
   assert.equal(firstReport.ok, true);
-  assert.equal(firstReport.schema_version, 3);
+  assert.equal(firstReport.schema_version, 4);
   assert.equal(firstReport.default_project, 'RAT');
   assert.equal(firstReport.project_created, true);
   assert.equal(firstReport.path, box.dbPath);
@@ -298,7 +394,7 @@ test('CLI: init дважды подряд, вторая база уже с пр�
   const second = runCli(['init', '--json'], { dbPath: box.dbPath });
   assert.equal(second.code, 0, second.stderr);
   const secondReport = JSON.parse(second.stdout);
-  assert.equal(secondReport.schema_version, 3);
+  assert.equal(secondReport.schema_version, 4);
   assert.equal(secondReport.project_created, false);
 
   const wrapper = box.open();
@@ -314,7 +410,7 @@ test('CLI: doctor --json на здоровой базе → exit 0', (t) => {
   const report = JSON.parse(result.stdout);
   assert.equal(report.ok, true);
   assert.equal(report.journal_mode, 'wal');
-  assert.equal(report.schema_version, 3);
+  assert.equal(report.schema_version, 4);
 });
 
 test('CLI: глобальные флаги работают до команды', (t) => {

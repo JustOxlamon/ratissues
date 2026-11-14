@@ -12,7 +12,7 @@ export const REPO_ROOT = path.resolve(CORE_DIR, '..', '..');
 export const DEFAULT_DB_PATH = path.join(REPO_ROOT, 'data', 'issues.db');
 
 /** Текущая версия схемы; значение лежит в meta(schema_version). */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /** Коды выхода CLI. */
 export const EXIT_CODES = Object.freeze({
@@ -336,6 +336,15 @@ const MIGRATIONS = [
       db.exec('CREATE INDEX IF NOT EXISTS idx_issues_milestone ON issues(milestone_id)');
     },
   },
+  {
+    version: 4,
+    name: 'add canon',
+    up(db) {
+      // Аддитивно: отдельная таблица (аналог v3/milestones). Таблицы
+      // issues/events/milestones и FTS-триггеры не затрагиваются.
+      db.exec(CANON_SCHEMA_SQL);
+    },
+  },
 ];
 
 const BASE_SCHEMA_SQL = `
@@ -458,6 +467,43 @@ CREATE TABLE IF NOT EXISTS milestones (
 
 CREATE INDEX IF NOT EXISTS idx_milestones_project_state
   ON milestones(project_key, state, due_at);
+`;
+
+/*
+ * v4: канон проекта — актуальные решения из развилок («делай так / не делай
+ * так») для оператора и LLM. Отдельная таблица проектного уровня, как
+ * милстоуны: собственных событий в events не пишет, история — в полях записи
+ * (created_by/repealed_by/repeal_reason + supersedes_id/superseded_by).
+ * Публичный id — KEY-C{n} (num по проекту, аллокация max(num)+1 в
+ * BEGIN IMMEDIATE — как у issues). status: active | repealed; repealed —
+ * не активное правило, удаления нет.
+ */
+const CANON_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS canon (
+  id            INTEGER PRIMARY KEY,
+  project_key   TEXT NOT NULL REFERENCES projects(key),
+  num           INTEGER NOT NULL,
+  title         TEXT NOT NULL,
+  body          TEXT NOT NULL DEFAULT '',
+  status        TEXT NOT NULL DEFAULT 'active'
+                CHECK (status IN ('active','repealed')),
+  priority      INTEGER NOT NULL DEFAULT 2
+                CHECK (priority BETWEEN 0 AND 3),
+  labels        TEXT NOT NULL DEFAULT '[]',
+  source_issue  TEXT,
+  supersedes_id INTEGER,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL,
+  repealed_at   INTEGER,
+  repeal_reason TEXT,
+  created_by    TEXT NOT NULL,
+  repealed_by   TEXT,
+  meta          TEXT NOT NULL DEFAULT '{}',
+  UNIQUE (project_key, num)
+);
+
+CREATE INDEX IF NOT EXISTS idx_canon_project_status
+  ON canon(project_key, status, priority);
 `;
 
 const FTS_SCHEMA_SQL = `

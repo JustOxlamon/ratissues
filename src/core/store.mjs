@@ -1437,6 +1437,33 @@ export function doctor(wrapper) {
     }
   }
 
+  const canonTable = safeTableExists(db, 'canon');
+  if (!canonTable) {
+    checks.push({
+      id: 'canon',
+      ok: false,
+      message: 'Нет таблицы canon — выполните rat init',
+    });
+  } else {
+    try {
+      const total = Number(db.prepare('SELECT COUNT(*) AS n FROM canon').get().n);
+      const active = Number(
+        db.prepare("SELECT COUNT(*) AS n FROM canon WHERE status = 'active'").get().n,
+      );
+      checks.push({
+        id: 'canon',
+        ok: true,
+        message: `Канон: ${total} (active ${active})`,
+      });
+    } catch (err) {
+      checks.push({
+        id: 'canon',
+        ok: false,
+        message: `Не удалось проверить канон: ${err?.message ?? err}`,
+      });
+    }
+  }
+
   if (initialized) {
     try {
       const orphanIssues = db

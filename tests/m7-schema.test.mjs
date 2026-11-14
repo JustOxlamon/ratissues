@@ -89,7 +89,7 @@ test('rat init обновляет stale-базу, данные остаются,
 
   const init = runCli(['init', '--json'], { dbPath: box.dbPath });
   assert.equal(init.code, 0, init.stderr);
-  assert.equal(JSON.parse(init.stdout).schema_version, 3);
+  assert.equal(JSON.parse(init.stdout).schema_version, 4);
 
   const ls = runCli(['ls', '--json'], { dbPath: box.dbPath });
   assert.equal(ls.code, 0, ls.stderr);
