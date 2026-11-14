@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Локальный трекер задач для множества мелких проектов (Node 24 + node:sqlite)",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "rat": "./bin/rat.mjs"
