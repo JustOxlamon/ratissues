@@ -27,7 +27,7 @@ description: "Use when tracking work in the local rat task tracker (RAT-1 style 
 rat next --json                 # что делать дальше (priority asc, затем старые)
 rat claim RAT-7                 # doing + assignee = $RAT_ACTOR
 # ... работа ...
-rat comment RAT-7 --body - <<'EOF'
+rat comment RAT-7 - <<'EOF'
 Сделано: ...
 Файлы: ...
 Коммит: ...
@@ -45,6 +45,7 @@ rat done RAT-7 --reason "тесты зелёные"
 |---|---|
 | `rat init` | создать/мигрировать базу (идемпотентно) |
 | `rat doctor` | проверки: схема, WAL, FTS5, целостность |
+| `rat backup` | снапшот БД сейчас; автобекап перед командами (`--list`, `--keep N`) |
 | `rat project add KEY --name "..."` | новый проект (`--path DIR` — якорь для автодетекта) |
 | `rat project ls` | проекты и счётчики (`--all` с архивом) |
 | `rat project archive KEY` | скрыть проект, задачи остаются |
@@ -72,7 +73,7 @@ rat done RAT-7 --reason "тесты зелёные"
 | `rat serve` | web UI + JSON API, только loopback (`--port 4711`) |
 
 Глобальные флаги в любом месте argv: `--json`, `--quiet`, `--db <path>`,
-`--actor <name>`, `-h`.
+`--actor <name>`, `--no-backup`, `-h`.
 
 ## Милстоуны (вехи)
 
@@ -161,7 +162,7 @@ rat canon reactivate AXEL-C2                                 # вернуть в
 
 ```bash
 rat init        # идемпотентно, данные сохраняются
-rat doctor      # проверить: схема, WAL, FTS5, milestones
+rat doctor      # проверить: схема, WAL, FTS5, целостность
 ```
 
 То же касается базы, созданной старой версией: `doctor` покажет FAIL по схеме,
