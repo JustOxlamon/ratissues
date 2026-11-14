@@ -16,6 +16,7 @@ import {
   archiveProject,
   changeStatus,
   claimIssue,
+  createCanon,
   createIssue,
   createProject,
   initDatabase,
@@ -383,12 +384,21 @@ test('CLI export в файл: создаёт exports/, печатает путь
   );
   assert.equal(json.code, 0, json.stderr);
   const report = JSON.parse(json.stdout);
-  assert.deepEqual(Object.keys(report), ['path', 'format', 'bytes', 'projects', 'issues', 'events']);
+  assert.deepEqual(Object.keys(report), [
+    'path',
+    'format',
+    'bytes',
+    'projects',
+    'issues',
+    'events',
+    'canon',
+  ]);
   assert.equal(report.path, path.resolve(jsonTarget));
   assert.equal(report.format, 'jsonl');
   assert.equal(report.bytes, statSync(jsonTarget).size);
   assert.equal(report.issues, 1);
   assert.equal(report.events, 0);
+  assert.equal(report.canon, 0);
 
   const mdJson = JSON.parse(
     runCli(['export', '--out', path.join(box.dir, 'exports', 'r.md'), '--json'], {
@@ -467,4 +477,61 @@ test('CLI export: неизвестный проект → exit 1, help соде�
   assert.equal(exportHelp.code, 0, exportHelp.stderr);
   assert.match(exportHelp.stdout, /rat export \[project\]/);
   assert.match(exportHelp.stdout, /--format md\|jsonl/);
+});
+
+test('экспорт: канон в jsonl (type первым), в md-блоке и детерминизм', (t) => {
+  const { wrapper } = setup(t);
+  createIssue(wrapper, { title: 'Задача' });
+  const active = createCanon(wrapper, {
+    project: 'RAT',
+    title: 'Только node:*',
+    priority: 1,
+    labels: 'deps',
+    source: 'RAT-1',
+    actor: 't',
+  });
+  createCanon(wrapper, { project: 'RAT', title: 'Отменённое', priority: 2 });
+  createCanon(wrapper, {
+    project: 'RAT',
+    title: 'Замена',
+    source: 'RAT-1',
+    supersedes: active.id,
+    actor: 't',
+  });
+
+  const lines = parsedLines(exportJsonl(wrapper, { project: 'RAT' }));
+
+  // Первая запись — канон-правило, поле type идёт первым, дальше serializeCanon.
+  const first = lines[0];
+  assert.equal(first.type, 'canon');
+  assert.deepEqual(Object.keys(first), [
+    'type', 'id', 'project', 'num', 'title', 'body', 'status', 'priority',
+    'labels', 'source_issue', 'supersedes', 'created_at', 'updated_at',
+    'repealed_at', 'repeal_reason', 'created_by', 'repealed_by', 'meta',
+  ]);
+
+  // Канон первыми (проект, num), затем задачи; активное и отменённое попадают оба.
+  assert.deepEqual(
+    lines.filter((line) => line.type === 'canon').map((line) => line.id),
+    ['RAT-C1', 'RAT-C2', 'RAT-C3'],
+  );
+  const issuesStart = lines.findIndex((line) => line.type === undefined);
+  assert.ok(issuesStart >= 3, 'канон должен идти до задач');
+  assert.equal(lines[issuesStart].id, 'RAT-1');
+
+  // md: блок ## Канон только с активными правилами.
+  const md = exportMarkdown(wrapper, { project: 'RAT' });
+  assert.match(md, /## Канон/);
+  assert.match(md, /\*\*RAT-C2\*\* · \[p2\] · Отменённое/);
+  assert.match(md, /\*\*RAT-C3\*\* · \[p2\] · Замена/);
+  assert.match(md, /источник: RAT-1/);
+  assert.doesNotMatch(md, /Только node:\*/);
+
+  // Детерминизм: два прогона побайтово совпадают.
+  assert.equal(exportJsonl(wrapper, { project: 'RAT' }), exportJsonl(wrapper, { project: 'RAT' }));
+  assert.equal(exportMarkdown(wrapper, { project: 'RAT' }), exportMarkdown(wrapper, { project: 'RAT' }));
+
+  // Отчёт --json: счётчик canon.
+  const report = buildExport(wrapper, { project: 'RAT', format: 'jsonl' });
+  assert.equal(report.canon, 3);
 });
