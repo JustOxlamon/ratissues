@@ -9,10 +9,10 @@ import {
 } from './db.mjs';
 import { listEvents } from './events.mjs';
 
-/** Ключ проекта: uppercase, 2–10 символов A-Z0-9 (PLAN §3). */
+/** Ключ проекта: uppercase, 2–10 символов A-Z0-9. */
 export const PROJECT_KEY_RE = /^[A-Z0-9]{2,10}$/;
 
-/** Допустимые статусы задачи (PLAN §3). */
+/** Допустимые статусы задачи. */
 export const ISSUE_STATUSES = Object.freeze([
   'open',
   'doing',
@@ -25,7 +25,7 @@ export const ISSUE_STATUSES = Object.freeze([
 /** Статусы, попадающие в `active`. `deferred` намеренно не входит (задача припаркована). */
 export const ACTIVE_STATUSES = Object.freeze(['open', 'doing', 'blocked']);
 
-/** Допустимые состояния милстоуна (PLAN §13). */
+/** Допустимые состояния милстоуна. */
 export const MILESTONE_STATES = Object.freeze(['open', 'closed']);
 
 /** Максимальная длина имени милстоуна в символах. */
@@ -304,7 +304,7 @@ export function serializeEvent(event) {
 }
 
 // ---------------------------------------------------------------------------
-// Милстоуны (M7): чтение
+// Милстоуны: чтение
 
 /**
  * Нормализует имя милстоуна: trim, непустое, не длиннее 200 символов.
@@ -345,7 +345,7 @@ export function milestoneNameKey(name) {
 }
 
 /**
- * Строка milestones (+ агрегаты) → публичное представление (PLAN §13).
+ * Строка milestones (+ агрегаты) → публичное представление.
  * @param {object} row
  * @returns {object}
  */
@@ -461,7 +461,7 @@ export function listMilestones(wrapper, {
 }
 
 // ---------------------------------------------------------------------------
-// Чтение M2: поиск/списки, next, лента, статистика
+// Чтение: поиск/списки, next, лента, статистика
 
 /**
  * Поиск задач с фильтрами и курсорной пагинацией.
@@ -769,7 +769,7 @@ export function getStats(wrapper, { now = Date.now() } = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Внутренние помощники M2
+// Внутренние помощники
 
 function ensureReady(wrapper) {
   ensureSchemaCurrent(wrapper);

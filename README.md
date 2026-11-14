@@ -9,12 +9,12 @@ CLI с JSON-выводом для LLM и простой web UI (Tailwind, dark) 
 - Удаления нет: задача уходит в `cancelled`, комментарии неизменяемы (правка —
   новый комментарий).
 
-Готовы этапы **M0–M7**: схема и миграции, проекты, полный цикл задач, поиск,
-лента событий, статистика, милстоуны с прогрессом, экспорт в `md`/`jsonl`,
-HTTP API, `rat serve`, запись из UI (новая задача, статусы, милстоуны,
-комментарии), SSE, клавиатура, адаптив и полировка интерфейса.
+Реализовано: схема и миграции, проекты, полный цикл задач (создание, статусы,
+правка, комментарии), поиск, лента событий, статистика, милстоуны с прогрессом,
+экспорт `md`/`jsonl`, автобекапы, HTTP API, `rat serve`, web UI с записью
+(новая задача, статусы, милстоуны, комментарии), SSE, клавиатура, адаптив.
 
-Милстоуны (PLAN §13) — это именованные вехи внутри проекта (например `v1.0`):
+Милстоуны — это именованные вехи внутри проекта (например `v1.0`):
 задача может быть привязана к одной вехе, прогресс считается как
 `done / (total − cancelled)`. Удаления нет: веха бывает `open` или `closed`.
 
@@ -74,10 +74,11 @@ RAT_DB    # %USERPROFILE%\.rat\issues.db — стабильная база вн�
 cd /d/any/other/project && rat project ls --json && rat ls --json
 ```
 
-Для агентов opencode: глобальный скилл `rat`
-(`~/.config/opencode/skills/rat/SKILL.md`) описывает протокол работы (цикл
-`next → claim → comment → done`, коды выхода, `--actor`, `--idem`), поэтому
-правила доступны в любой сессии, а не только в этом репозитории.
+Для агентов opencode: скилл `rat` лежит в репозитории —
+`.opencode/skills/rat/SKILL.md`. Он описывает протокол работы (цикл
+`next → claim → comment → done`, милстоуны, коды выхода, `--actor`, `--idem`).
+Чтобы правила были доступны в любой сессии, скопируйте каталог в
+`~/.config/opencode/skills/rat/`.
 
 ## Команды
 
@@ -108,7 +109,6 @@ cd /d/any/other/project && rat project ls --json && rat ls --json
 | `rat stats` | счётчики по проектам/статусам/приоритетам и за 7 дней | `--json` |
 | `rat export [project]` | снапшот в `md`/`jsonl` для чтения, грепа и git | `--format md\|jsonl`, `--out FILE\|-`, `--events`, `--all`, `--limit N`, `--json` |
 | `rat serve` | запустить web UI + JSON API (только loopback) | `--port 4711`, `--host 127.0.0.1`, `--open`, `--quiet` |
-| `rat doctor` | проверки: БД, WAL, FTS5, права, битый JSON | `--json` |
 
 Глобальные флаги (в любом месте argv): `--json` (машиночитаемый вывод),
 `--quiet` (минимум), `--db <path>` (путь к базе), `--actor <name>` (автор
@@ -202,7 +202,7 @@ cd /d/any/other/project && rat project ls --json && rat ls --json
 `--json` при записи в файл печатает объект
 `{path, format, bytes, projects, issues, events}`; с `--out -` он несовместим.
 
-Рекомендация (PLAN §8): коммитить `exports/` в git проекта — получается
+Рекомендация: коммитить `exports/` в git проекта — получается
 бесплатная история трекера без GitHub Issues. В этом репозитории `exports/`
 пока в `.gitignore`; если нужна история в git, уберите эту строку.
 
@@ -338,6 +338,7 @@ web/app.css            скомпилированный Tailwind (в git)
 web/tailwind.src.css   исходный CSS для Tailwind
 tools/build-css.mjs    запуск Tailwind CLI
 tests/                 node:test на временной БД
+.opencode/skills/rat/  скилл opencode: протокол работы с rat
 data/issues.db         рантайм-база (.gitignore)
 data/backups/          автобекапы базы (внутри .gitignore)
 exports/               снапшоты (.gitignore в этом репозитории)

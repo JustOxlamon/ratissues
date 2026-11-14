@@ -14,7 +14,7 @@ export const DEFAULT_DB_PATH = path.join(REPO_ROOT, 'data', 'issues.db');
 /** Текущая версия схемы; значение лежит в meta(schema_version). */
 export const SCHEMA_VERSION = 3;
 
-/** Коды выхода CLI (PLAN §4). */
+/** Коды выхода CLI. */
 export const EXIT_CODES = Object.freeze({
   OK: 0,
   NOT_FOUND: 1,
@@ -183,7 +183,7 @@ export function getSchemaVersion(wrapperOrDb) {
 /**
  * Проверяет, что схема инициализирована и соответствует версии этого rat.
  *
- * Миграции применяет только `rat init` (PLAN §13), поэтому остальные команды
+ * Миграции применяет только `rat init`, поэтому остальные команды
  * не «догоняют» схему сами, а падают понятной ошибкой с подсказкой. Без этой
  * проверки устаревшая база v1/v2 падала бы сырой ошибкой SQLite
  * («no such table: milestones») из-за новых запросов.
@@ -435,7 +435,7 @@ CREATE INDEX IF NOT EXISTS idx_issues_status_updated
 `;
 
 /*
- * v3: милстоуны (PLAN §13). issues.milestone_id добавляется отдельным
+ * v3: милстоуны. issues.milestone_id добавляется отдельным
  * ALTER, потому что колонки нет в v1/v2. name_key — ключ уникальности:
  * SQLite COLLATE NOCASE не понижает регистр кириллицы, а нормализация
  * в JS это делает предсказуемо.

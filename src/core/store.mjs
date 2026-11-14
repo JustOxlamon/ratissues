@@ -42,22 +42,23 @@ export const DEFAULT_PROJECT_NAME = 'RatIssues';
 /** Закрытые статусы: выход только через reopen. */
 export const CLOSED_STATUSES = Object.freeze(['done', 'cancelled']);
 
-/** Приоритет по умолчанию (PLAN §3). */
+/** Приоритет по умолчанию. */
 export const DEFAULT_PRIORITY = 2;
 
-/** Предел размера title/body в байтах (PLAN §3: «до ~64 КБ»). */
+/** Предел размера title/body в байтах (до ~64 КБ). */
 export const MAX_TEXT_BYTES = 64 * 1024;
 
 /*
  * store.mjs — единственный доменный писатель в БД. CLI и HTTP API вызывают
  * только его функции, а не SQL напрямую.
  *
- * M0: initDatabase, doctor.
- * M1: createProject, listProjectsWithCounts, createIssue, getIssue,
- * getIssueDetail, changeStatus, claimIssue, addComment. Все изменения пишут
+ * initDatabase, doctor.
+ * Запись: createProject, listProjectsWithCounts, createIssue, getIssue,
+ * getIssueDetail, changeStatus, claimIssue, addComment, editIssue (одно событие
+ * kind=edit на изменённое поле), archiveProject, милстоуны. Все изменения пишут
  * событие через events.appendEvent в той же транзакции, что и строку issues.
- * M2: editIssue (одно событие kind=edit на изменённое поле), archiveProject.
- * Чтение M2 (searchIssues, nextIssue, listLog, getStats) живёт в query.mjs.
+ * Чтение (searchIssues, nextIssue, listLog, getStats, listMilestones) живёт
+ * в query.mjs.
  */
 
 /**
@@ -397,7 +398,7 @@ export function changeStatus(wrapper, {
 
 /**
  * Взять задачу в работу: status=doing, assignee=actor, событие kind=claim
- * (вместо события status — в PLAN claim отдельный kind).
+ * (вместо события status — claim пишется отдельным kind).
  * @param {{db: import('node:sqlite').DatabaseSync}} wrapper
  * @param {{ref:string|number, actor?:string, env?:NodeJS.ProcessEnv}} input
  * @returns {{issue: object, event: object}}
@@ -768,7 +769,7 @@ export function updateIssue(wrapper, {
 }
 
 /**
- * Создаёт милстоун в проекте (PLAN §13). События не пишутся: милстоун —
+ * Создаёт милстоун в проекте. События не пишутся: милстоун —
  * атрибут проектного уровня, как и сам проект. Дубль имени (по name_key)
  * в проекте → ConflictError milestone_exists.
  * @param {{db: import('node:sqlite').DatabaseSync}} wrapper
@@ -1057,7 +1058,7 @@ function sameStringArray(a, b) {
 }
 
 // ---------------------------------------------------------------------------
-// Внутренние помощники M1
+// Внутренние помощники
 
 function ensureInitialized(wrapper) {
   ensureSchemaCurrent(wrapper);

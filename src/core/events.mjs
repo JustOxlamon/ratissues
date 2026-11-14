@@ -1,7 +1,7 @@
 import { unwrapDb, UsageError } from './db.mjs';
 import { formatIssueId, normalizeProjectKey, resolveIssue } from './query.mjs';
 
-/** Допустимые типы событий (PLAN §3). */
+/** Допустимые типы событий. */
 export const EVENT_KINDS = Object.freeze(['created', 'status', 'comment', 'edit', 'link', 'claim']);
 
 /** Автор по умолчанию, если не заданы --actor и RAT_ACTOR. */

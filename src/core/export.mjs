@@ -28,7 +28,7 @@ export const EXPORT_FORMATS = Object.freeze(['md', 'jsonl']);
 /** Каталог снапшотов: всегда от корня репозитория, а не от cwd. */
 export const EXPORTS_DIR = path.join(REPO_ROOT, 'exports');
 
-/** В md показываем последние N событий каждой задачи (PLAN §8). */
+/** В md показываем последние N событий каждой задачи. */
 export const MAX_EVENTS_PER_ISSUE = 10;
 
 const COMMENT_PREVIEW_CHARS = 200;
@@ -429,7 +429,7 @@ function resolveScope(wrapper, { project, all, mode, cwd, env }) {
 
   if (includeAll) return { projects: listProjects(wrapper, { includeArchived: true }) };
 
-  // jsonl по умолчанию — снапшот всей базы (PLAN §8: exports/all.jsonl),
+  // jsonl по умолчанию — снапшот всей базы (exports/all.jsonl),
   // архивные проекты добавляет только явный --all.
   if (mode === 'jsonl') return { projects: listProjects(wrapper, { includeArchived: false }) };
 
