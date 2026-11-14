@@ -31,6 +31,9 @@ CLI с JSON-выводом для LLM и простой web UI (Tailwind, dark) 
 ## Быстрый старт
 
 ```bash
+git clone https://github.com/JustOxlamon/ratissues.git
+cd ratissues
+
 node bin/rat.mjs init
 node bin/rat.mjs project add AXEL --name "Axel" --path ../axel --color sky
 

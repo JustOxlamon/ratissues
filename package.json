@@ -4,6 +4,15 @@
   "private": true,
   "description": "Локальный трекер задач для множества мелких проектов (Node 24 + node:sqlite)",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JustOxlamon/ratissues.git"
+  },
+  "homepage": "https://github.com/JustOxlamon/ratissues",
+  "bugs": {
+    "url": "https://github.com/JustOxlamon/ratissues/issues"
+  },
+  "author": "JustOxlamon",
   "type": "module",
   "bin": {
     "rat": "./bin/rat.mjs"
