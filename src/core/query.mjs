@@ -461,6 +461,199 @@ export function listMilestones(wrapper, {
 }
 
 // ---------------------------------------------------------------------------
+// Канон: чтение
+
+/** Допустимые состояния канон-правила. */
+export const CANON_STATES = Object.freeze(['active', 'repealed']);
+
+/** Колонки канон-правила + публичная ссылка на заменённое правило (KEY-Cn). */
+export const CANON_SELECT = `
+  SELECT c.id, c.project_key, c.num, c.title, c.body, c.status, c.priority,
+         c.labels, c.source_issue, c.supersedes_id,
+         (SELECT c2.project_key || '-C' || c2.num
+          FROM canon c2 WHERE c2.id = c.supersedes_id) AS supersedes,
+         c.created_at, c.updated_at, c.repealed_at, c.repeal_reason,
+         c.created_by, c.repealed_by, c.meta
+  FROM canon c`;
+
+/**
+ * Публичный идентификатор канон-правила: KEY-C1.
+ * @param {{project_key:string, num:number}} rule
+ * @returns {string}
+ */
+export function formatCanonId(rule) {
+  return `${rule.project_key}-C${Number(rule.num)}`;
+}
+
+/**
+ * Разбирает ссылку на канон-правило: RAT-C1, C1 или голое число — num внутри
+ * переданного projectKey (scope), как у задач с числовым id.
+ * @param {string|number} ref
+ * @param {{projectKey?: string|null}} [options]
+ * @returns {{projectKey:string, num:number}}
+ * @throws {UsageError} invalid_canon_ref
+ */
+export function parseCanonRef(ref, { projectKey = null } = {}) {
+  if (typeof ref !== 'string' && typeof ref !== 'number') {
+    throw new UsageError('Идентификатор канон-правила должен быть строкой или числом.', {
+      code: 'invalid_canon_ref',
+    });
+  }
+  const value = String(ref).trim();
+  const full = /^([A-Za-z0-9]{2,10})-C(\d+)$/i.exec(value);
+  if (full) {
+    const num = Number(full[2]);
+    if (num > 0) return { projectKey: normalizeProjectKey(full[1]), num };
+  }
+  const scope = projectKey === null || projectKey === undefined ? null : normalizeProjectKey(projectKey);
+  if (scope) {
+    const scoped = /^C(\d+)$/i.exec(value);
+    const bare = /^(\d+)$/.exec(value);
+    const num = scoped ? Number(scoped[1]) : bare ? Number(bare[1]) : null;
+    if (num !== null && num > 0) return { projectKey: scope, num };
+  }
+  throw new UsageError(
+    `Некорректный идентификатор канон-правила «${ref}»: ожидается RAT-C1${scope ? ' или C1' : ''}.`,
+    { code: 'invalid_canon_ref' },
+  );
+}
+
+/**
+ * Сырая строка canon по ссылке. projectKey (scope) нужен для C1 / голого числа.
+ * @param {{db: import('node:sqlite').DatabaseSync}|import('node:sqlite').DatabaseSync} wrapperOrDb
+ * @param {{ref: string|number, projectKey?: string|null}} [input]
+ * @returns {object}
+ * @throws {UsageError} invalid_canon_ref
+ * @throws {NotFoundError} canon_not_found
+ */
+export function resolveCanon(wrapperOrDb, { ref, projectKey = null } = {}) {
+  const db = unwrapDb(wrapperOrDb);
+  const parsed = parseCanonRef(ref, { projectKey });
+  const row = db
+    .prepare(`${CANON_SELECT} WHERE c.project_key = ? AND c.num = ?`)
+    .get(parsed.projectKey, parsed.num);
+  if (!row) {
+    throw new NotFoundError(`Канон-правило ${formatCanonId(parsed)} не найдено.`, {
+      code: 'canon_not_found',
+      hint: 'Посмотрите правила: rat canon ls',
+    });
+  }
+  return row;
+}
+
+/**
+ * Строка canon → публичное представление. Порядок полей фиксирован (контракт,
+ * его фиксируют тесты и экспорт jsonl: type, id, project, ...).
+ * @param {object} row
+ * @returns {object}
+ */
+export function serializeCanon(row) {
+  return {
+    id: formatCanonId(row),
+    project: row.project_key,
+    num: Number(row.num),
+    title: row.title,
+    body: row.body ?? '',
+    status: row.status,
+    priority: Number(row.priority),
+    labels: parseLabelsJson(row.labels),
+    source_issue: row.source_issue ?? null,
+    supersedes: row.supersedes ?? null,
+    created_at: Number(row.created_at),
+    updated_at: Number(row.updated_at),
+    repealed_at: row.repealed_at === null || row.repealed_at === undefined ? null : Number(row.repealed_at),
+    repeal_reason: row.repeal_reason ?? null,
+    created_by: row.created_by,
+    repealed_by: row.repealed_by ?? null,
+    meta: parseMetaJson(row.meta),
+  };
+}
+
+/**
+ * Список канон-правил. По умолчанию — только активные («актуальные решения»).
+ * project = null → все неархивные проекты. Сортировка: active первыми → priority
+ * asc → created_at asc → id asc. `q` — дешёвый LIKE по title/body (без FTS).
+ * @param {{db: import('node:sqlite').DatabaseSync}} wrapper
+ * @param {{project?: string|null, state?: 'active'|'repealed'|'all', label?: string|null, q?: string|null, includeArchived?: boolean, cwd?: string, env?: NodeJS.ProcessEnv}} [options]
+ * @returns {object[]}
+ * @throws {UsageError|NotFoundError}
+ */
+export function listCanon(wrapper, {
+  project = null,
+  state = 'active',
+  label = null,
+  q = null,
+  includeArchived = false,
+  cwd = process.cwd(),
+  env = process.env,
+} = {}) {
+  ensureReady(wrapper);
+  const db = unwrapDb(wrapper);
+  const stateFilter = normalizeCanonState(state);
+  const labelValue = isEmpty(label) ? null : normalizeLabel(label);
+  const queryText = isEmpty(q) ? null : String(q).trim();
+
+  const where = [];
+  const params = [];
+
+  if (project !== null && project !== undefined && !isEmpty(project)) {
+    const projectRow = resolveProject(db, { project, cwd, env });
+    where.push('c.project_key = ?');
+    params.push(projectRow.key);
+  } else if (!includeArchived) {
+    where.push('c.project_key IN (SELECT key FROM projects WHERE archived_at IS NULL)');
+  }
+
+  if (stateFilter !== 'all') {
+    where.push('c.status = ?');
+    params.push(stateFilter);
+  }
+
+  if (labelValue !== null) {
+    where.push(
+      `EXISTS (
+         SELECT 1 FROM json_each(
+           CASE WHEN json_valid(c.labels) THEN c.labels ELSE '[]' END
+         ) WHERE json_each.value = ?
+       )`,
+    );
+    params.push(labelValue);
+  }
+
+  if (queryText !== null) {
+    ensureLowerFunction(db);
+    const pattern = `%${escapeLike(queryText.toLowerCase())}%`;
+    where.push(
+      `(rat_lower(c.title) LIKE ? ESCAPE '\\' OR rat_lower(c.body) LIKE ? ESCAPE '\\')`,
+    );
+    params.push(pattern, pattern);
+  }
+
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const orderSql =
+    "ORDER BY CASE c.status WHEN 'active' THEN 0 ELSE 1 END, c.priority ASC, c.created_at ASC, c.id ASC";
+
+  return db
+    .prepare(`${CANON_SELECT} ${whereSql} ${orderSql}`)
+    .all(...params)
+    .map(serializeCanon);
+}
+
+/** Нормализует состояние канон-правила для фильтра: active|repealed|all. */
+function normalizeCanonState(value) {
+  if (value === null || value === undefined || value === '') return 'active';
+  if (typeof value !== 'string') {
+    throw new UsageError('Состояние канон-правила: ожидается строка.', { code: 'invalid_state' });
+  }
+  const state = value.trim().toLowerCase();
+  if (state === 'all' || CANON_STATES.includes(state)) return state;
+  throw new UsageError(
+    `Недопустимое состояние «${value}». Допустимо: ${[...CANON_STATES, 'all'].join(', ')}.`,
+    { code: 'invalid_state' },
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Чтение: поиск/списки, next, лента, статистика
 
 /**
