@@ -1,11 +1,12 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-const STATUS_ORDER = ['open', 'doing', 'blocked', 'done', 'cancelled'];
+const STATUS_ORDER = ['open', 'doing', 'blocked', 'deferred', 'done', 'cancelled'];
 const STATUS_LABELS = {
   open: 'open',
   doing: 'doing',
   blocked: 'blocked',
+  deferred: 'deferred',
   done: 'done',
   cancelled: 'cancelled',
 };

@@ -1,8 +1,9 @@
-/** ANSI-цвета статусов (PLAN §5: open lime, doing sky, blocked amber, done emerald, cancelled rose). */
+/** ANSI-цвета статусов (PLAN §5: open lime, doing sky, blocked amber, deferred violet, done emerald, cancelled rose). */
 export const STATUS_COLORS = Object.freeze({
   open: 92,
   doing: 36,
   blocked: 33,
+  deferred: 35,
   done: 32,
   cancelled: 31,
 });

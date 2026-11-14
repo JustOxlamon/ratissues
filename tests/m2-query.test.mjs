@@ -450,6 +450,7 @@ test('getStats: счётчики проектов/статусов/приори�
     open: 1,
     doing: 0,
     blocked: 0,
+    deferred: 0,
     done: 2,
     cancelled: 0,
     total: 3,
@@ -459,6 +460,7 @@ test('getStats: счётчики проектов/статусов/приори�
     open: 1,
     doing: 0,
     blocked: 0,
+    deferred: 0,
     done: 0,
     cancelled: 0,
     total: 1,
@@ -468,6 +470,7 @@ test('getStats: счётчики проектов/статусов/приори�
     open: 2,
     doing: 0,
     blocked: 0,
+    deferred: 0,
     done: 2,
     cancelled: 0,
   });

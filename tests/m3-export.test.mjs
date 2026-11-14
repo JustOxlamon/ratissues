@@ -103,7 +103,7 @@ test('exportMarkdown: заголовок, порядок секций, мета�
   const md = exportMarkdown(wrapper, { project: 'RAT' });
 
   assert.ok(md.startsWith('# RAT — RatIssues\n'), 'заголовок проекта первой строкой');
-  assert.match(md, /Сводка: всего 5 · open 2 · doing 1 · blocked 0 · done 1 · cancelled 1/);
+  assert.match(md, /Сводка: всего 5 · open 2 · doing 1 · blocked 0 · deferred 0 · done 1 · cancelled 1/);
   assert.match(md, /\n## Открытые\n/);
   assert.match(md, /\n## Закрытые\n/);
   assert.ok(md.endsWith('\n'));
@@ -153,7 +153,7 @@ test('exportMarkdown: пустой проект и пустая база даю�
 
   const empty = exportMarkdown(wrapper, { project: 'EMPTY' });
   assert.ok(empty.startsWith('# EMPTY — Empty\n'));
-  assert.match(empty, /Сводка: всего 0 · open 0 · doing 0 · blocked 0 · done 0 · cancelled 0/);
+  assert.match(empty, /Сводка: всего 0 · open 0 · doing 0 · blocked 0 · deferred 0 · done 0 · cancelled 0/);
   assert.match(empty, /## Открытые\n\n_Задач нет\._/);
   assert.match(empty, /## Закрытые\n\n_Задач нет\._/);
   assert.ok(empty.endsWith('\n'));

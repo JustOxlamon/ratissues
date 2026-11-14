@@ -14,6 +14,10 @@ CLI с JSON-выводом для LLM и простой web UI (Tailwind, dark) 
 запись из UI (новая задача, статусы, комментарии), SSE, клавиатура, адаптив
 и полировка интерфейса.
 
+**M7 (милстоуны)** пока только в плане (`PLAN.md` §13): схема v3 с таблицей
+`milestones` и `issues.milestone_id` уже мигрируется, но команды, API и UI
+появятся отдельным этапом. В таблице команд ниже их намеренно нет.
+
 ## Требования
 
 - Node.js **24+** (нужен встроенный `node:sqlite`).
@@ -88,7 +92,7 @@ cd /d/any/other/project && rat project ls --json && rat ls --json
 | `rat project ls` | проекты и счётчики по статусам | `--all` (с архивом), `--json` |
 | `rat project archive KEY` | скрыть проект из списков, не удаляя задачи | `--json` |
 | `rat add "title"` | создать задачу | `--project K`, `--body TEXT\|-`, `--label a,b`, `--priority 0..3`, `--ref`, `--assignee`, `--idem UUID`, `--json` |
-| `rat ls [project]` | список задач | `-s open\|doing\|blocked\|done\|cancelled\|active\|all`, `--label`, `--priority N\|pN\|0..1`, `-q TEXT`, `--limit N`, `--sort pri\|updated`, `--cursor C`, `--all`, `--json` |
+| `rat ls [project]` | список задач | `-s open\|doing\|blocked\|deferred\|done\|cancelled\|active\|all`, `--label`, `--priority N\|pN\|0..1`, `-q TEXT`, `--limit N`, `--sort pri\|updated`, `--cursor C`, `--all`, `--json` |
 | `rat show ID` | задача + последние события | `--events N` (default 20), `--json` |
 | `rat edit ID` | правка полей, каждое изменение → событие `edit` | `--title T\|-`, `--body T\|-`, `--priority`, `--label +x,-y`, `--assignee`, `--ref`, `--json` |
 | `rat status ID <status>` | сменить статус | `--reason TEXT`, `--json` |
@@ -112,10 +116,11 @@ cd /d/any/other/project && rat project ls --json && rat ls --json
 
 ## Статусы и приоритеты
 
-- Статусы: `open`, `doing`, `blocked`, `done`, `cancelled`.
+- Статусы: `open`, `doing`, `blocked`, `deferred`, `done`, `cancelled`.
 - Приоритеты: `0..3` (`p0` — срочно, `p3` — когда-нибудь), по умолчанию `2`.
 - Переходы свободные, кроме выхода из `done`/`cancelled` — только через
-  `rat reopen`.
+  `rat reopen`. `deferred` (отложено) — как `open`: уходить можно свободно,
+  в `active` и `rat next` он не попадает.
 - `doing` без явного исполнителя ставит `assignee = actor`.
 - `done`/`cancelled` заполняют `closed_at` и `close_reason`; `reopen` их очищает.
 
@@ -173,9 +178,9 @@ cd /d/any/other/project && rat project ls --json && rat ls --json
 | `rat export ... --out -` | stdout, ровно снапшот, без баннеров (для piping) |
 
 `md` — человекочитаемый файл: заголовок проекта и сводка, затем «Открытые»
-(`open`/`doing`/`blocked`, по приоритету и давности обновления) и «Закрытые»
-(`done`/`cancelled`, по времени закрытия), у каждой задачи метаданные, тело и
-последние 10 событий. `jsonl` — по одному JSON-объекту в строке со стабильным
+(`open`/`doing`/`blocked`, по приоритету и давности обновления), «Отложенные»
+(`deferred`, по давности обновления) и «Закрытые» (`done`/`cancelled`, по времени
+закрытия), у каждой задачи метаданные, тело и последние 10 событий. `jsonl` — по одному JSON-объекту в строке со стабильным
 порядком полей: задача — как в `rat ls --json`, событие (`--events`) —
 `id, issue, project, ts, actor, kind, data`. Порядок записей тоже стабилен:
 задачи — `project`, затем `num`; события — `ts`, затем `id`. Это позволяет
@@ -252,7 +257,7 @@ rat serve --open    # открыть браузер
 
 Тёмная тема: `bg-zinc-950`, панели `zinc-900`, бордеры `zinc-800`, акцентные
 цвета статусов (`open` lime, `doing` sky, `blocked` amber, `done` emerald,
-`cancelled` rose). У проектов есть цвет (`--color` при создании): слаг палитры
+`cancelled` rose, `deferred` violet). У проектов есть цвет (`--color` при создании): слаг палитры
 (`lime`, `sky`, `amber`, `emerald`, `rose`, `violet`, `zinc`) или hex, который
 отображается точкой у id и в сайдбаре.
 

@@ -68,14 +68,36 @@ RatIssues/
 | id INTEGER PK | внутренний |
 | project_key + num | публичный `KEY-NUM`, UNIQUE(project_key, num) |
 | title, body | до ~64 КБ, markdown |
-| status | `open` \| `doing` \| `blocked` \| `done` \| `cancelled` |
+| status | `open` \| `doing` \| `blocked` \| `deferred` \| `done` \| `cancelled` |
 | priority | 0–3 (`p0` срочно … `p3` когда-нибудь), default 2 |
 | labels | JSON-массив строк, нормализованный (lowercase, sorted) |
 | assignee | TEXT NULL, свободная строка (`agent:claude`, `me`) |
 | ref | TEXT NULL — внешняя ссылка/путь/URL, чтобы связать с кодом |
+| milestone_id | INTEGER NULL → `milestones(id)`, милстоун того же проекта (M7) |
 | created_at, updated_at | epoch ms |
-| closed_at, close_reason | при `done`/`cancelled`; reopen их очищает |
+| closed_at, close_reason | при `done`/`cancelled`; reopen их очищает. `deferred` — не закрывает |
 | meta | JSON — запасное поле без миграций |
+
+**milestones** (M7, см. §13)
+
+| поле | смысл |
+|---|---|
+| id INTEGER PK | внутренний; наружу — имя внутри проекта |
+| project_key | проект-владелец; милстоун не переносится между проектами |
+| name | человекочитаемое имя (`v1.2`, `запуск беты`), до 200 символов |
+| name_key | `trim().toLowerCase()` — ключ уникальности и поиска (NOCASE не понижает регистр кириллицы) |
+| body | markdown-описание, до 64 КБ |
+| due_at | epoch ms или NULL; `--due YYYY-MM-DD` трактуется как 00:00 UTC |
+| state | `open` \| `closed`; закрытие **не** закрывает задачи |
+| created_at, updated_at, closed_at | epoch ms |
+| meta | JSON — запасное поле без миграций |
+
+Прогресс не хранится, а считается: `done / (total − cancelled)`.
+`issues.milestone_id = NULL` — легальное состояние «без милстоуна»: это не
+синтетическая запись в `milestones` и не отдельная группа в счётчиках.
+Отдельного вида события `milestone` нет: привязка/отвязка пишется событием
+`edit` с `field: "milestone"` (`from`/`to` — имя или `null`). Жизненный цикл
+самого милстоуна, как и проекта, в `events` не пишется — он проектного уровня.
 
 **events** (append-only, единственный источник истории)
 
@@ -110,10 +132,14 @@ Pragma на каждом коннекте: `journal_mode=WAL`, `busy_timeout=500
 | `rat project add KEY --name "..." [--path ...] [--color ...]` | новый проект |
 | `rat project ls [--all] [--json]` | проекты + счётчики по статусам |
 | `rat project archive KEY` | скрыть из дефолтных списков |
-| `rat add "title" [--project K] [--body TEXT\|-] [--label a,b] [--priority 1] [--ref ...] [--assignee ...]` | создать; `--body -` читает stdin; `--json` → `{"id":"RAT-12",...}` |
-| `rat ls [project] [-s open|doing|blocked|done|cancelled\|active\|all] [--label] [--priority] [-q TEXT] [--limit N] [--sort pri\|updated]` | таблица/JSON |
+| `rat milestone add NAME [--project K] [--due YYYY-MM-DD] [--body TEXT\|-]` | новый милстоун проекта (M7) |
+| `rat milestone ls [project] [--state open\|closed\|all]` | милстоуны + прогресс |
+| `rat milestone edit NAME [--name] [--due] [--body] [--clear-due]` | переименовать/срок/описание |
+| `rat milestone close NAME` / `rat milestone reopen NAME` | закрыть/открыть милстоун |
+| `rat add "title" [--project K] [--body TEXT\|-] [--label a,b] [--priority 1] [--ref ...] [--assignee ...] [--milestone NAME]` | создать; `--body -` читает stdin; `--json` → `{"id":"RAT-12",...}` |
+| `rat ls [project] [-s open|doing|blocked|deferred|done|cancelled\|active\|all] [--label] [--priority] [--milestone NAME\|none] [-q TEXT] [--limit N] [--sort pri\|updated]` | таблица/JSON |
 | `rat show ID [--events N] [--json]` | задача + последние N событий (default 20) одним вызовом |
-| `rat edit ID [--title] [--body] [--priority] [--label +x,-y] [--assignee] [--ref]` | правки, каждая → событие `edit` |
+| `rat edit ID [--title] [--body] [--priority] [--label +x,-y] [--assignee] [--ref] [--milestone NAME\|-]` | правки, каждая → событие `edit`; `--milestone -` снимает привязку |
 | `rat status ID <status> [--reason]` | смена статуса |
 | `rat done ID [--reason]` / `rat cancel ID [--reason]` / `rat reopen ID [--reason]` | сахар над `status` |
 | `rat claim ID` | `doing` + `assignee=$RAT_ACTOR` (агенту: «беру в работу») |
@@ -134,6 +160,7 @@ Pragma на каждом коннекте: `journal_mode=WAL`, `busy_timeout=500
 `rat project add`.
 
 **Переходы статусов:** свободные, кроме `done`/`cancelled` → только через `reopen`.
+`deferred` — открытый (как `open`), уход свободный, в `active`/`next` не попадает.
 `doing` без assignee автоматически ставит actor.
 
 ## 5. Web UI
@@ -152,8 +179,15 @@ Pragma на каждом коннекте: `journal_mode=WAL`, `busy_timeout=500
 4. **Новая задача** — модалка: проект, title, body, priority, labels, ref.
 5. **Глобал** — `/` поиск по всем проектам, `/log` лента событий всех проектов.
 
+**Милстоуны (M7).** В детали — чип милстоуна (клик → фильтр списка), в списке —
+фильтр по милстоуну, в сайдбаре под проектом — прогресс активных милстоунов.
+Создание/закрытие/переименование — через CLI или API; UI назначает милстоун
+задаче и фильтрует по нему. Чип «Без милстоуна» — это фильтр по
+`milestone_id IS NULL`, а не запись в списке милстоунов. Любая мутация и SSE
+обновляют прогресс через `refreshAll` (список, проекты, мини-статистика).
+
 **Тема:** `bg-zinc-950`, панели `zinc-900`, бордеры `zinc-800`, текст `zinc-100/zinc-400`.
-Акценты: `doing` sky, `blocked` amber, `done` emerald, `cancelled` rose, `open` lime.
+Акценты: `doing` sky, `blocked` amber, `deferred` violet, `done` emerald, `cancelled` rose, `open` lime.
 Моноширинный для id. Никаких градиентов и стекла — плотный, спокойный интерфейс
 для десятков проектов. Адаптив: сайдбар → drawer, список → карточки.
 
@@ -171,10 +205,13 @@ Fallback — polling 5s при потере соединения. Обновле
 ```
 GET    /api/projects
 POST   /api/projects                      {key,name,root_path,color}
-GET    /api/issues?project&status&label&q&priority&limit&cursor
-POST   /api/issues                        {project,title,body,priority,labels,ref,actor}
+GET    /api/milestones?project&state&all
+POST   /api/milestones                    {project,name,body,due_at}
+PATCH  /api/milestones/:ref?project=K     :ref = имя в проекте (id не публикуется); {name,body,due_at,state}
+GET    /api/issues?project&status&label&q&priority&milestone&limit&cursor
+POST   /api/issues                        {project,title,body,priority,labels,ref,milestone,actor}
 GET    /api/issues/:id                    :id = RAT-12 | 12
-PATCH  /api/issues/:id                    {status,title,body,priority,labels,assignee,ref,actor,reason}
+PATCH  /api/issues/:id                    {status,title,body,priority,labels,assignee,ref,milestone,actor,reason}
 POST   /api/issues/:id/comments           {text,actor}
 GET    /api/issues/:id/events?limit
 GET    /api/log?project&since&kind
@@ -204,9 +241,13 @@ UI никогда не пишет в базу напрямую.
 
 ## 8. Экспорт и история
 
-- `md` — по проекту: заголовок, открытые по приоритету, затем закрытые, у каждой
-  задачи метаданные и последние 10 событий. Читаемо человеком, диффается в git.
-- `jsonl` — строка на задачу или событие (`--events`), стабильный порядок полей.
+- `md` — по проекту: заголовок, блок милстоунов с прогрессом, открытые по
+  приоритету, затем закрытые, у каждой задачи метаданные и последние 10 событий.
+  Читаемо человеком, диффается в git.
+- `jsonl` — строка на задачу или событие (`--events`), стабильный порядок полей:
+  `id, project, num, title, body, status, priority, labels, assignee, ref,
+  milestone, created_at, updated_at, closed_at, close_reason, meta`
+  (`milestone` — имя или `null`).
 - По умолчанию в `exports/<KEY>.md` и `exports/all.jsonl`; `--out -` → stdout.
 - Рекомендация: коммитить `exports/` в git проекта — получается бесплатная
   история изменений трекера без использования GitHub Issues.
@@ -239,14 +280,22 @@ UI никогда не пишет в базу напрямую.
 | **M4** | HTTP API + `serve` + статика, read-only UI (список/деталь/поиск) | можно смотреть задачи в браузере |
 | **M5** | запись из UI: новая задача, статусы, комментарии, SSE | человек живёт в браузере, не в терминале |
 | **M6** | полировка: клавиатура, `--open`, project из cwd, цвета, адаптив, тесты | `node --test` зелёный, UX не бесит |
+| **M7** | милстоуны: схема v3, `rat milestone`, `--milestone`, API, экспорт, UI-чип/фильтр/прогресс | милстоун закрывается вручную, прогресс считается, схема v2→v3 без потерь |
 
 Порядок сознательный: M1–M3 уже дают рабочую систему для агента, UI — сверху.
+M7 — первое расширение модели после полировки: аддитивная миграция и полный
+вертикальный срез через те же слои.
 
 ## 10. Тесты и приёмка
 
 - `node:test` на временной БД: нумерация под параллелизмом (10 «одновременных»
   insert → 10 разных номеров), переходы статусов, `--idem`, FTS-поиск, экспорт.
 - CLI-контракт: `--json` схемы полей фиксированы, коды выхода проверяются.
+- Милстоуны (M7): миграция v2→v3 без потерь и идемпотентная; после миграции
+  у старых задач `milestone_id = NULL` и остальные поля не меняются;
+  уникальность `name_key` внутри проекта при совпадении имён между проектами;
+  запрет чужого и закрытого милстоуна; прогресс с `cancelled`; фильтр
+  `--milestone NAME|none`; события `edit {field:"milestone"}`.
 - Ручная приёмка: создать 3 проекта, 20 задач, закрыть/отменить, перезапустить
   сервер, убедиться что история и нумерация целы.
 
@@ -255,12 +304,82 @@ UI никогда не пишет в базу напрямую.
 Нет авторизации, мультипользовательности, синхронизации, уведомлений, вложений,
 подзадач-дерева, спринтов, time-tracking, git-интеграции, Electron/Tauri-обёртки,
 сборки бандла в рантайме. Всё это — только если реально понадобится.
+Милстоуны (M7) — не спринт: нет временных боксов, velocity и автопереноса
+незакрытых задач; это ручная группировка по цели/релизу.
 
 ## 12. Решения по умолчанию
 
 - Имя бинаря `rat`, база `Q:\Sources\AI\RatIssues\data\issues.db` (override `RAT_DB`).
 - Порт `4711`, только loopback.
-- Статусы: `open/doing/blocked/done/cancelled`; приоритеты `0..3`, default `2`.
+- Статусы: `open/doing/blocked/deferred/done/cancelled`; приоритеты `0..3`, default `2`.
 - Комментарии неизменяемы; исправление — новый комментарий.
 - Удаления нет; «мусор» → `cancelled`.
 - Tailwind — standalone CLI при разработке, результат в git; рантайм офлайн.
+
+## 13. M7 — милстоуны
+
+Группировка задач по цели или релизу внутри проекта. Не спринт (нет временных
+боксов, velocity, автопереноса незакрытых) и не автоматическая версия: `state`
+закрывается вручную, задачи не закрываются вместе с милстоуном. Схема — в §3,
+команды — в §4, эндпоинты — в §6, UI — в §5, экспорт — в §8.
+
+### Миграция v3
+
+Аддитивная: `CREATE TABLE milestones` + `ALTER TABLE issues ADD COLUMN
+milestone_id`. `issues`/`events` не пересобираются, FTS-триггеры не затрагиваются.
+`SCHEMA_VERSION = 3`, применяется через `rat init` (как и прежние миграции).
+Проверка идемпотентности: повторный `migrate` возвращает 3 и ничего не дублирует.
+
+### Правила
+
+- Милстоун принадлежит одному проекту; задача ссылается только на милстоун
+  своего проекта (`invalid_milestone`, exit 2).
+- Имя уникально в проекте без учёта регистра (`name_key`); одинаковые имена
+  в разных проектах — норма. Переименование меняет `name`, но не `id`, поэтому
+  привязки задач не рвутся.
+- Закрытый милстоун нельзя назначить новой задаче (`milestone_closed`, exit 3);
+  уже привязанные задачи остаются, `reopen` снова разрешает назначение.
+- Прогресс: `done / (total − cancelled)`; `cancelled` не портит процент.
+- Привязка/отвязка → событие `edit {field:"milestone", from, to}`; отдельного
+  `kind` нет, чтобы не пересобирать `events`.
+- Существующие задачи миграция не трогает: у всех `milestone_id = NULL`, бэкфилла,
+  авто-милстоуна «Backlog» и пересортировки нет. `NULL` — состояние «без
+  милстоуна»: в списках милстоунов и счётчиках не появляется, в прогресс не
+  входит, в экспорте — `milestone: null`. Привязка только явная (`add`/`edit`
+  с `--milestone`); массового назначения в M7 нет.
+- Удаления нет: только `open`/`closed`.
+
+### Порядок работ
+
+1. **M7.1 core** — `store.mjs` (create/list/update/close/reopen, привязка в
+   `createIssue`/`updateIssue`), `query.mjs` (`milestone` в `serializeIssue`,
+   фильтр `NAME|none`, прогресс), проверки в `doctor`.
+2. **M7.2 CLI** — `rat milestone add|ls|edit|close|reopen`, `--milestone`
+   в `add`/`edit`/`ls`, `--json` и `--quiet` по общим правилам.
+3. **M7.3 API** — `/api/milestones`, `milestone` в issue-эндпоинтах.
+   `PATCH /api/milestones/:ref` требует `project` (query или body): имя
+   уникально только внутри проекта. SSE не меняется: `issue.updated` уже
+   покрывает перепривязку; жизненный цикл милстоуна подтягивается следующим
+   `refreshAll`/перезагрузкой (отдельного события нет).
+4. **M7.4 export** — md-раздел с прогрессом, поле `milestone` в jsonl;
+   детерминизм и неизменность БД после экспорта.
+5. **M7.5 UI** — чип в детали, фильтр, прогресс в сайдбаре, выбор милстоуна
+   в модалке новой задачи и в правке; `refreshAll` после мутаций и SSE.
+6. **M7.6 docs** — README (команды, флаги), AGENTS (состояние), тесты.
+
+### Приёмка
+
+- `rat init` на базе v2: задачи, id, FTS и `events` целы, версия 3,
+  `rat doctor` зелёный. Все существующие задачи после миграции имеют
+  `milestone_id = NULL`, их статусы, даты и labels не изменились; в выборке
+  по умолчанию и в экспорте они на прежних местах.
+- Два прогона `rat export` на базе с милстоунами побайтово совпадают;
+  БД после экспорта не изменилась.
+- `rat ls --milestone v1.0` и `rat ls --milestone none` дают ожидаемые выборки.
+- API: `POST /api/milestones` → `GET /api/issues?milestone=...` →
+  `PATCH /api/milestones/:ref {state:"closed"}`; ответы содержат `progress`.
+- UI: после создания/закрытия милстоуна и после SSE обновляются список,
+  проекты и мини-статистика (единый `refreshAll`).
+- `node --test` зелёный; новые тесты покрывают миграцию v2→v3, уникальность
+  имени, чужой проект, закрытый милстоун, прогресс с `cancelled`, экспорт,
+  коды выхода.

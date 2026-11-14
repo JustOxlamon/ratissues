@@ -7,7 +7,7 @@ export const meta = {
   name: 'ls',
   summary: 'список задач с фильтрами',
   usage:
-    'rat ls [project] [-s open|doing|blocked|done|cancelled|active|all] [--label X] ' +
+    'rat ls [project] [-s open|doing|blocked|deferred|done|cancelled|active|all] [--label X] ' +
     '[--priority N|pN|0..1] [-q TEXT] [--limit N] [--sort pri|updated] [--cursor C] [--all] [--json]',
 };
 

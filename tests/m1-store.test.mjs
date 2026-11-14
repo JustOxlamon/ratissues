@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { migrate, readMeta } from '../src/core/db.mjs';
 import { listEvents } from '../src/core/events.mjs';
+import { getStats, searchIssues } from '../src/core/query.mjs';
 import {
   addComment,
   changeStatus,
@@ -77,6 +78,7 @@ test('listProjectsWithCounts: счётчики по статусам, сорти
     open: 0,
     doing: 1,
     blocked: 0,
+    deferred: 0,
     done: 1,
     cancelled: 0,
     total: 2,
@@ -85,6 +87,7 @@ test('listProjectsWithCounts: счётчики по статусам, сорти
     open: 0,
     doing: 0,
     blocked: 0,
+    deferred: 0,
     done: 0,
     cancelled: 0,
     total: 0,
@@ -263,7 +266,54 @@ test('changeStatus: doing ставит actor, done/cancel закрывают, re
     () => changeStatus(wrapper, { ref: issue.id, status: 'nope' }),
     (err) => err.code === 'invalid_status' && err.exitCode === 2,
   );
-  assert.deepEqual(ISSUE_STATUSES, ['open', 'doing', 'blocked', 'done', 'cancelled']);
+  assert.deepEqual(ISSUE_STATUSES, ['open', 'doing', 'blocked', 'deferred', 'done', 'cancelled']);
+});
+
+test('changeStatus: deferred — не закрывает, обратимо свободно, не входит в active', (t) => {
+  const box = createSandbox(t, 'rat-m1-store-');
+  const wrapper = box.open();
+  initDatabase(wrapper);
+
+  const issue = createIssue(wrapper, { title: 'Отложить' });
+  const deferred = changeStatus(wrapper, {
+    ref: issue.id,
+    status: 'deferred',
+    reason: 'ждём данных',
+    actor: 'me',
+  });
+  assert.equal(deferred.issue.status, 'deferred');
+  // deferred — не закрытый статус: closed_at/close_reason не заполняются.
+  assert.equal(deferred.issue.closed_at, null);
+  assert.equal(deferred.issue.close_reason, null);
+  assert.equal(deferred.issue.updated_at, deferred.event.ts);
+  assert.deepEqual(deferred.event.data, { from: 'open', to: 'deferred', reason: null });
+
+  // Из deferred уходить можно свободно — reopen не нужен.
+  const back = changeStatus(wrapper, { ref: issue.id, status: 'doing', actor: 'me' });
+  assert.equal(back.issue.status, 'doing');
+  assert.equal(back.issue.closed_at, null);
+
+  // Этого формата придерживается и assignee: deferred не ставит actor автоматически.
+  const again = changeStatus(wrapper, { ref: issue.id, status: 'deferred', actor: 'me' });
+  assert.equal(again.issue.status, 'deferred');
+
+  // deferred не попадает ни в active, ни в next (ищет только open).
+  const active = searchIssues(wrapper, { status: 'active' });
+  assert.equal(active.issues.some((item) => item.id === issue.id), false);
+
+  const counts = listProjectsWithCounts(wrapper).find((project) => project.key === 'RAT');
+  assert.deepEqual(counts.counts, {
+    open: 0,
+    doing: 0,
+    blocked: 0,
+    deferred: 1,
+    done: 0,
+    cancelled: 0,
+    total: 1,
+  });
+
+  const stats = getStats(wrapper);
+  assert.equal(stats.totals.byStatus.deferred, 1);
 });
 
 test('claimIssue: doing + assignee=actor, событие kind=claim, на закрытой → конфликт', (t) => {

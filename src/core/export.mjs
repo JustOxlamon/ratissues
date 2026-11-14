@@ -194,6 +194,13 @@ function buildMarkdown(wrapper, scope) {
          ORDER BY i.priority ASC, i.updated_at ASC, i.id ASC`,
       )
       .all(project.key, ...ACTIVE_STATUSES);
+    const deferred = db
+      .prepare(
+        `${ISSUE_SELECT}
+         WHERE i.project_key = ? AND i.status = 'deferred'
+         ORDER BY i.updated_at ASC, i.id ASC`,
+      )
+      .all(project.key);
     const closed = db
       .prepare(
         `${ISSUE_SELECT}
@@ -202,8 +209,8 @@ function buildMarkdown(wrapper, scope) {
       )
       .all(project.key);
 
-    issues += active.length + closed.length;
-    const rendered = renderProject(wrapper, project, active, closed);
+    issues += active.length + deferred.length + closed.length;
+    const rendered = renderProject(wrapper, project, active, deferred, closed);
     events += rendered.events;
     sections.push(rendered.content);
   }
@@ -220,18 +227,19 @@ function buildMarkdown(wrapper, scope) {
   };
 }
 
-function renderProject(wrapper, project, activeRows, closedRows) {
+function renderProject(wrapper, project, activeRows, deferredRows, closedRows) {
   const counts = Object.fromEntries(ISSUE_STATUSES.map((status) => [status, 0]));
-  for (const row of [...activeRows, ...closedRows]) {
+  for (const row of [...activeRows, ...deferredRows, ...closedRows]) {
     if (Object.hasOwn(counts, row.status)) counts[row.status] += 1;
   }
-  const total = activeRows.length + closedRows.length;
+  const total = activeRows.length + deferredRows.length + closedRows.length;
   const archived = project.archived_at === null || project.archived_at === undefined ? '' : ' (архив)';
   const summary = `Сводка: всего ${total} · ${ISSUE_STATUSES.map(
     (status) => `${status} ${counts[status]}`,
   ).join(' · ')}`;
 
   const openSection = renderSection(wrapper, '## Открытые', activeRows);
+  const deferredSection = renderSection(wrapper, '## Отложенные', deferredRows);
   const closedSection = renderSection(wrapper, '## Закрытые', closedRows);
 
   return {
@@ -239,9 +247,10 @@ function renderProject(wrapper, project, activeRows, closedRows) {
       `# ${project.key} — ${project.name}${archived}`,
       summary,
       openSection.content,
+      deferredSection.content,
       closedSection.content,
     ].join('\n\n'),
-    events: openSection.events + closedSection.events,
+    events: openSection.events + deferredSection.events + closedSection.events,
   };
 }
 

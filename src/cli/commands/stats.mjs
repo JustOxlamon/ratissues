@@ -38,7 +38,7 @@ export function run(ctx) {
 
 function printHuman(ctx, stats) {
   const color = useColor(ctx.io, ctx.env);
-  const statuses = ['open', 'doing', 'blocked', 'done', 'cancelled'];
+  const statuses = ['open', 'doing', 'blocked', 'deferred', 'done', 'cancelled'];
   const headers = ['KEY', 'NAME', ...statuses.map((status) => status.toUpperCase()), 'TOTAL'];
   const rows = stats.projects.map((project) => [
     project.key,

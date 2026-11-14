@@ -12,7 +12,7 @@ export const REPO_ROOT = path.resolve(CORE_DIR, '..', '..');
 export const DEFAULT_DB_PATH = path.join(REPO_ROOT, 'data', 'issues.db');
 
 /** Текущая версия схемы; значение лежит в meta(schema_version). */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 3;
 
 /** Коды выхода CLI (PLAN §4). */
 export const EXIT_CODES = Object.freeze({
@@ -195,6 +195,20 @@ export function tableExists(wrapperOrDb, name) {
 }
 
 /**
+ * Есть ли колонка у таблицы (для идемпотентных ALTER TABLE в миграциях).
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {string} table имя таблицы (литерал из кода, не пользовательский ввод)
+ * @param {string} column
+ * @returns {boolean}
+ */
+function columnExists(db, table, column) {
+  return db
+    .prepare(`PRAGMA table_info(${table})`)
+    .all()
+    .some((row) => row.name === column);
+}
+
+/**
  * Идемпотентные миграции. Создаёт meta, при необходимости — остальную схему
  * и (если сборка умеет FTS5) issues_fts с триггерами.
  * @param {{db: DatabaseSync}|DatabaseSync} wrapperOrDb
@@ -220,19 +234,26 @@ export function migrate(wrapperOrDb) {
     );
   }
 
-  for (const migration of MIGRATIONS) {
-    if (version >= migration.version) continue;
-    try {
-      transaction(db, () => {
-        migration.up(db);
-        writeMeta(db, 'schema_version', migration.version);
-      }, 'IMMEDIATE');
-    } catch (err) {
-      throw err instanceof RatError
-        ? err
-        : asDbError(err, `Миграция v${migration.version} не удалась`, 'migrate_failed');
+  // Foreign keys выключаем только на время миграций: пересоздание issues
+  // (v2, добавление статуса deferred) требует DROP TABLE c FK-зависимой events.
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    for (const migration of MIGRATIONS) {
+      if (version >= migration.version) continue;
+      try {
+        transaction(db, () => {
+          migration.up(db);
+          writeMeta(db, 'schema_version', migration.version);
+        }, 'IMMEDIATE');
+      } catch (err) {
+        throw err instanceof RatError
+          ? err
+          : asDbError(err, `Миграция v${migration.version} не удалась`, 'migrate_failed');
+      }
+      version = migration.version;
     }
-    version = migration.version;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
   }
 
   const hasFts5 = ensureFts(wrapperOrDb, db);
@@ -247,6 +268,34 @@ const MIGRATIONS = [
     name: 'initial schema',
     up(db) {
       db.exec(BASE_SCHEMA_SQL);
+    },
+  },
+  {
+    version: 2,
+    name: 'add deferred status',
+    up(db) {
+      const row = db
+        .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'issues'")
+        .get();
+      if (row && typeof row.sql === 'string' && row.sql.includes('deferred')) return;
+      db.exec(REBUILD_ISSUES_V2_SQL);
+      db.exec(ISSUES_INDEXES_SQL);
+      db.exec(FTS_SCHEMA_SQL);
+      db.exec("INSERT INTO issues_fts(issues_fts) VALUES('rebuild')");
+    },
+  },
+  {
+    version: 3,
+    name: 'add milestones',
+    up(db) {
+      // Аддитивно: новая таблица + nullable-колонка. issues/events не
+      // пересобираются, FTS-триггеры не затрагиваются. CHECK для events
+      // намеренно не меняем: привязка пишется событием kind='edit'.
+      db.exec(MILESTONES_SCHEMA_SQL);
+      if (!columnExists(db, 'issues', 'milestone_id')) {
+        db.exec('ALTER TABLE issues ADD COLUMN milestone_id INTEGER REFERENCES milestones(id)');
+      }
+      db.exec('CREATE INDEX IF NOT EXISTS idx_issues_milestone ON issues(milestone_id)');
     },
   },
 ];
@@ -268,7 +317,7 @@ CREATE TABLE IF NOT EXISTS issues (
   title        TEXT NOT NULL,
   body         TEXT NOT NULL DEFAULT '',
   status       TEXT NOT NULL DEFAULT 'open'
-               CHECK (status IN ('open','doing','blocked','done','cancelled')),
+               CHECK (status IN ('open','doing','blocked','deferred','done','cancelled')),
   priority     INTEGER NOT NULL DEFAULT 2
                CHECK (priority BETWEEN 0 AND 3),
   labels       TEXT NOT NULL DEFAULT '[]',
@@ -299,6 +348,78 @@ CREATE TABLE IF NOT EXISTS events (
 
 CREATE INDEX IF NOT EXISTS idx_events_issue_ts ON events(issue_id, ts);
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
+`;
+
+/*
+ * v2: расширение CHECK статуса статусом `deferred`. SQLite не умеет менять
+ * CHECK без пересоздания таблицы, поэтому issues пересобирается (данные и id
+ * сохраняются — events.issue_id и FTS-индекс не ломаются). Запускается с
+ * foreign_keys=OFF (см. migrate), чтобы DROP TABLE не упирался в FK из events.
+ */
+const REBUILD_ISSUES_V2_SQL = `
+CREATE TABLE issues_rat_v2 (
+  id           INTEGER PRIMARY KEY,
+  project_key  TEXT NOT NULL REFERENCES projects(key),
+  num          INTEGER NOT NULL,
+  title        TEXT NOT NULL,
+  body         TEXT NOT NULL DEFAULT '',
+  status       TEXT NOT NULL DEFAULT 'open'
+               CHECK (status IN ('open','doing','blocked','deferred','done','cancelled')),
+  priority     INTEGER NOT NULL DEFAULT 2
+               CHECK (priority BETWEEN 0 AND 3),
+  labels       TEXT NOT NULL DEFAULT '[]',
+  assignee     TEXT,
+  ref          TEXT,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL,
+  closed_at    INTEGER,
+  close_reason TEXT,
+  meta         TEXT NOT NULL DEFAULT '{}',
+  UNIQUE (project_key, num)
+);
+
+INSERT INTO issues_rat_v2
+  (id, project_key, num, title, body, status, priority, labels, assignee, ref,
+   created_at, updated_at, closed_at, close_reason, meta)
+SELECT id, project_key, num, title, body, status, priority, labels, assignee, ref,
+       created_at, updated_at, closed_at, close_reason, meta
+FROM issues;
+
+DROP TABLE issues;
+ALTER TABLE issues_rat_v2 RENAME TO issues;
+`;
+
+const ISSUES_INDEXES_SQL = `
+CREATE INDEX IF NOT EXISTS idx_issues_project_status
+  ON issues(project_key, status, priority);
+CREATE INDEX IF NOT EXISTS idx_issues_status_updated
+  ON issues(status, updated_at);
+`;
+
+/*
+ * v3: милстоуны (PLAN §13). issues.milestone_id добавляется отдельным
+ * ALTER, потому что колонки нет в v1/v2. name_key — ключ уникальности:
+ * SQLite COLLATE NOCASE не понижает регистр кириллицы, а нормализация
+ * в JS это делает предсказуемо.
+ */
+const MILESTONES_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS milestones (
+  id          INTEGER PRIMARY KEY,
+  project_key TEXT NOT NULL REFERENCES projects(key),
+  name        TEXT NOT NULL,
+  name_key    TEXT NOT NULL,
+  body        TEXT NOT NULL DEFAULT '',
+  due_at      INTEGER,
+  state       TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open','closed')),
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  closed_at   INTEGER,
+  meta        TEXT NOT NULL DEFAULT '{}',
+  UNIQUE (project_key, name_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_milestones_project_state
+  ON milestones(project_key, state, due_at);
 `;
 
 const FTS_SCHEMA_SQL = `

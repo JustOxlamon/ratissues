@@ -148,7 +148,7 @@ export function createProject(wrapper, { key, name, rootPath = null, color = nul
  * Проекты со счётчиками по статусам. Стабильная сортировка по key.
  * @param {{db: import('node:sqlite').DatabaseSync}} wrapper
  * @param {{includeArchived?: boolean}} [options]
- * @returns {Array<{key:string,name:string,root_path:string|null,color:string,created_at:number,archived_at:number|null,counts:{open:number,doing:number,blocked:number,done:number,cancelled:number,total:number}}>}
+ * @returns {Array<{key:string,name:string,root_path:string|null,color:string,created_at:number,archived_at:number|null,counts:{open:number,doing:number,blocked:number,deferred:number,done:number,cancelled:number,total:number}}>}
  */
 export function listProjectsWithCounts(wrapper, { includeArchived = false } = {}) {
   ensureInitialized(wrapper);
@@ -160,6 +160,7 @@ export function listProjectsWithCounts(wrapper, { includeArchived = false } = {}
               COALESCE(SUM(CASE WHEN i.status = 'open' THEN 1 ELSE 0 END), 0) AS open_count,
               COALESCE(SUM(CASE WHEN i.status = 'doing' THEN 1 ELSE 0 END), 0) AS doing_count,
               COALESCE(SUM(CASE WHEN i.status = 'blocked' THEN 1 ELSE 0 END), 0) AS blocked_count,
+               COALESCE(SUM(CASE WHEN i.status = 'deferred' THEN 1 ELSE 0 END), 0) AS deferred_count,
               COALESCE(SUM(CASE WHEN i.status = 'done' THEN 1 ELSE 0 END), 0) AS done_count,
               COALESCE(SUM(CASE WHEN i.status = 'cancelled' THEN 1 ELSE 0 END), 0) AS cancelled_count,
               COUNT(i.id) AS total
@@ -182,6 +183,7 @@ export function listProjectsWithCounts(wrapper, { includeArchived = false } = {}
       open: Number(row.open_count),
       doing: Number(row.doing_count),
       blocked: Number(row.blocked_count),
+      deferred: Number(row.deferred_count),
       done: Number(row.done_count),
       cancelled: Number(row.cancelled_count),
       total: Number(row.total),

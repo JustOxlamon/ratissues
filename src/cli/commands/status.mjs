@@ -5,7 +5,7 @@ import { parseArgs } from '../args.mjs';
 export const meta = {
   name: 'status',
   summary: 'сменить статус задачи',
-  usage: 'rat status ID <open|doing|blocked|done|cancelled> [--reason TEXT] [--json]',
+  usage: 'rat status ID <open|doing|blocked|deferred|done|cancelled> [--reason TEXT] [--json]',
 };
 
 /**

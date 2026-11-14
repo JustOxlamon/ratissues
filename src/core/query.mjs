@@ -13,9 +13,16 @@ import { listEvents } from './events.mjs';
 export const PROJECT_KEY_RE = /^[A-Z0-9]{2,10}$/;
 
 /** Допустимые статусы задачи (PLAN §3). */
-export const ISSUE_STATUSES = Object.freeze(['open', 'doing', 'blocked', 'done', 'cancelled']);
+export const ISSUE_STATUSES = Object.freeze([
+  'open',
+  'doing',
+  'blocked',
+  'deferred',
+  'done',
+  'cancelled',
+]);
 
-/** Статусы, попадающие в `active`. */
+/** Статусы, попадающие в `active`. `deferred` намеренно не входит (задача припаркована). */
 export const ACTIVE_STATUSES = Object.freeze(['open', 'doing', 'blocked']);
 
 /** Колонки задачи, которые нужны serializeIssue. */
@@ -526,6 +533,7 @@ export function getStats(wrapper, { now = Date.now() } = {}) {
               COALESCE(SUM(CASE WHEN i.status = 'open' THEN 1 ELSE 0 END), 0) AS open_count,
               COALESCE(SUM(CASE WHEN i.status = 'doing' THEN 1 ELSE 0 END), 0) AS doing_count,
               COALESCE(SUM(CASE WHEN i.status = 'blocked' THEN 1 ELSE 0 END), 0) AS blocked_count,
+              COALESCE(SUM(CASE WHEN i.status = 'deferred' THEN 1 ELSE 0 END), 0) AS deferred_count,
               COALESCE(SUM(CASE WHEN i.status = 'done' THEN 1 ELSE 0 END), 0) AS done_count,
               COALESCE(SUM(CASE WHEN i.status = 'cancelled' THEN 1 ELSE 0 END), 0) AS cancelled_count,
               COUNT(i.id) AS total
@@ -543,6 +551,7 @@ export function getStats(wrapper, { now = Date.now() } = {}) {
       open: Number(row.open_count),
       doing: Number(row.doing_count),
       blocked: Number(row.blocked_count),
+      deferred: Number(row.deferred_count),
       done: Number(row.done_count),
       cancelled: Number(row.cancelled_count),
       total: Number(row.total),

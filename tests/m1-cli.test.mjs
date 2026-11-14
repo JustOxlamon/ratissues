@@ -138,6 +138,7 @@ test('CLI: полный цикл задачи — add → show → claim → com
     open: 0,
     doing: 0,
     blocked: 0,
+    deferred: 0,
     done: 0,
     cancelled: 1,
     total: 1,
@@ -196,6 +197,7 @@ test('CLI: JSON-схемы add / show / comment / status / project зафикс�
   assert.deepEqual(Object.keys(projectList.projects[0].counts).sort(), [
     'blocked',
     'cancelled',
+    'deferred',
     'doing',
     'done',
     'open',

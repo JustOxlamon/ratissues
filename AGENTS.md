@@ -9,8 +9,11 @@
   статусы, правка, комментарии), поиск, лента событий, статистика, экспорт
   `md`/`jsonl`, автобекапы БД с ротацией, HTTP API, `rat serve`, web UI с записью
   (новая задача, статусы, комментарии), SSE, клавиатура, адаптив и UI-полировка.
+- **M7 (милстоуны)** описан в `PLAN.md` §13. Схема v3 уже мигрируется
+  (`milestones`, `issues.milestone_id`), но команд, API и UI ещё нет: не считать
+  фичу готовой и не документировать её в README до реализации.
 - `PLAN.md` — единственный источник требований: структура каталогов, схема БД, CLI,
-  HTTP API, этапы M0–M6. Читать целиком перед крупной работой и не выдумывать
+  HTTP API, этапы M0–M7. Читать целиком перед крупной работой и не выдумывать
   файлы/команды/эндпоинты, которых там нет.
 - Карта файлов и все команды с флагами — в `README.md` (разделы «Команды» и
   «Архитектура»). Меняете CLI — обновите `README.md` в том же коммите.
@@ -65,8 +68,9 @@ node bin/rat.mjs serve --port 4711    # web UI + API только на loopback
   Не полагаться на автоинкремент и не делать `SELECT max` вне транзакции.
 - Pragma на **каждом** коннекте: `journal_mode=WAL`, `busy_timeout=5000`,
   `synchronous=NORMAL`, `foreign_keys=ON`.
-- Статусы: `open | doing | blocked | done | cancelled`. Приоритеты `0..3`, default `2`.
-  Из `done`/`cancelled` выход только через `reopen`; `doing` без assignee ставит actor.
+- Статусы: `open | doing | blocked | deferred | done | cancelled`. Приоритеты `0..3`, default `2`.
+  Из `done`/`cancelled` выход только через `reopen`; `deferred` — открытый, уходить можно свободно;
+  `doing` без assignee ставит actor.
 - Определение проекта: `--project` → `$RAT_PROJECT` → самый длинный `root_path`,
   являющийся префиксом cwd → `meta.default_project`. Ничего не найдено — ошибка с
   подсказкой `rat project add`.
@@ -116,7 +120,7 @@ node bin/rat.mjs serve --port 4711    # web UI + API только на loopback
 
 ## Тесты
 
-`node:test` на временной БД (своя на каждый тест). Сейчас 100 тестов: `init`,
+`node:test` на временной БД (своя на каждый тест). Сейчас 103 теста: `init`,
 `doctor`, `events`, `backup`, `m1-store`, `m1-cli`, `m2-edit`, `m2-query`, `m2-cli`,
 `m3-export`, `m4-api`, `m5-api`, `m5-sse`. Любая регрессия — блокер; новые команды
 приходят со своими тестами.
