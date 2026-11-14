@@ -270,7 +270,12 @@ SSE at `/api/stream`.
 ```bash
 npm run build:css   # rebuild web/app.css from web/tailwind.src.css
 rat serve --open    # open the browser
+serve.bat           # Windows: same as `rat serve --open`, extra flags are passed through
 ```
+
+`serve.bat` uses `%RAT_DB%`, else `%USERPROFILE%\.rat\issues.db` when present, else
+`<repo>\data\issues.db`, and prints the chosen path. Override with
+`serve.bat --db data\issues.db`.
 
 ### Keyboard
 

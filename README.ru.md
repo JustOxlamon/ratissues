@@ -260,7 +260,12 @@ cd /d/any/other/project && rat project ls --json && rat ls --json
 ```bash
 npm run build:css   # пересобрать web/app.css из web/tailwind.src.css
 rat serve --open    # открыть браузер
+serve.bat           # Windows: то же, что `rat serve --open`; лишние флаги пробрасываются
 ```
+
+`serve.bat` берёт базу из `%RAT_DB%`, иначе `%USERPROFILE%\.rat\issues.db`, если она
+есть, иначе `<repo>\data\issues.db`; выбранный путь печатается в консоль.
+Переопределить можно флагом: `serve.bat --db data\issues.db`.
 
 ### Клавиатура
 

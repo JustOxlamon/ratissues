@@ -3,3 +3,4 @@
 
 # Windows-обёртки вызова CLI — CRLF, как ожидает cmd.exe
 *.cmd text eol=crlf
+*.bat text eol=crlf
