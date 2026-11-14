@@ -12,16 +12,19 @@ import { listEvents, listEventsSinceId } from '../core/events.mjs';
 import {
   getStats,
   listLog,
+  listMilestones,
   searchIssues,
   serializeEvent,
 } from '../core/query.mjs';
 import {
   addComment,
   createIssue,
+  createMilestone,
   createProject,
   getIssue,
   listProjectsWithCounts,
   updateIssue,
+  updateMilestone,
 } from '../core/store.mjs';
 
 /**
@@ -119,11 +122,22 @@ async function routeGet(wrapper, req, res, url) {
       label: url.searchParams.get('label') ?? null,
       q: url.searchParams.get('q') ?? null,
       priority: url.searchParams.get('priority') ?? null,
+      milestone: url.searchParams.get('milestone') ?? null,
       limit: url.searchParams.get('limit') ?? 50,
       sort: url.searchParams.get('sort') ?? 'pri',
       cursor: url.searchParams.get('cursor') ?? null,
     });
     sendJson(res, { issues: result.issues, next_cursor: result.nextCursor });
+    return;
+  }
+
+  if (pathname === '/api/milestones') {
+    const milestones = listMilestones(wrapper, {
+      project: url.searchParams.get('project') ?? null,
+      state: url.searchParams.get('state') ?? 'open',
+      includeArchived: parseBoolean(url.searchParams.get('all')),
+    });
+    sendJson(res, { milestones });
     return;
   }
 
@@ -197,6 +211,7 @@ async function routeWrite(wrapper, req, res, url) {
   const method = req.method;
   const issueMatch = /^\/api\/issues\/([^/]+)$/.exec(pathname);
   const commentMatch = /^\/api\/issues\/([^/]+)\/comments$/.exec(pathname);
+  const milestoneMatch = /^\/api\/milestones\/([^/]+)$/.exec(pathname);
 
   // POST /api/projects
   if (pathname === '/api/projects' && method === 'POST') {
@@ -211,6 +226,50 @@ async function routeWrite(wrapper, req, res, url) {
     return;
   }
 
+  // POST /api/milestones
+  if (pathname === '/api/milestones' && method === 'POST') {
+    const body = await readJsonBody(req);
+    const milestone = createMilestone(wrapper, {
+      project: body.project ?? null,
+      name: body.name,
+      body: body.body ?? '',
+      dueAt: body.due_at ?? null,
+    });
+    sendJson(res, milestone, 201);
+    return;
+  }
+
+  // PATCH /api/milestones/:ref
+  if (milestoneMatch && method === 'PATCH') {
+    const body = await readJsonBody(req);
+    const project = url.searchParams.get('project') ?? body.project;
+    if (project === null || project === undefined || String(project).trim() === '') {
+      throw new UsageError('PATCH /api/milestones: нужен project (query или body).', {
+        code: 'invalid_project',
+      });
+    }
+    let ref;
+    try {
+      ref = decodeURIComponent(milestoneMatch[1]);
+    } catch {
+      throw new UsageError('Некорректное имя милстоуна в пути.', {
+        code: 'invalid_milestone',
+        hint: 'Посмотреть милстоуны: rat milestone ls',
+      });
+    }
+    const milestone = updateMilestone(wrapper, {
+      ref,
+      project,
+      name: body.name,
+      body: body.body,
+      dueAt: body.due_at,
+      clearDue: Boolean(body.clear_due),
+      state: body.state,
+    });
+    sendJson(res, milestone);
+    return;
+  }
+
   // POST /api/issues
   if (pathname === '/api/issues' && method === 'POST') {
     const body = await readJsonBody(req);
@@ -222,6 +281,7 @@ async function routeWrite(wrapper, req, res, url) {
       labels: body.labels ?? null,
       assignee: body.assignee ?? null,
       ref: body.ref ?? null,
+      milestone: body.milestone ?? null,
       actor: body.actor ?? 'web',
       idem: body.idem ?? null,
     });
@@ -241,6 +301,7 @@ async function routeWrite(wrapper, req, res, url) {
       labels: body.labels,
       assignee: body.assignee,
       ref: body.ref,
+      milestone: body.milestone,
       reason: body.reason ?? null,
       actor: body.actor ?? 'web',
     });
@@ -263,6 +324,22 @@ async function routeWrite(wrapper, req, res, url) {
   }
 
   // Существующий ресурс, но метод не поддерживается → 405.
+  if (pathname === '/api/milestones' && method !== 'POST') {
+    sendError(
+      res,
+      new UsageError(`Метод ${method} не поддерживается.`, { code: 'method_not_allowed' }),
+      405,
+    );
+    return;
+  }
+  if (milestoneMatch && method !== 'PATCH') {
+    sendError(
+      res,
+      new UsageError(`Метод ${method} не поддерживается.`, { code: 'method_not_allowed' }),
+      405,
+    );
+    return;
+  }
   if (pathname === '/api/issues' && method === 'PATCH') {
     sendError(
       res,
