@@ -15,7 +15,7 @@ import { createSandbox } from './helpers.mjs';
 
 const ISSUE_KEYS = [
   'id', 'project', 'num', 'title', 'body', 'status', 'priority', 'labels',
-  'assignee', 'ref', 'created_at', 'updated_at', 'closed_at', 'close_reason', 'meta',
+  'assignee', 'ref', 'milestone', 'created_at', 'updated_at', 'closed_at', 'close_reason', 'meta',
 ];
 
 const EVENT_KEYS = ['id', 'issue', 'project', 'ts', 'actor', 'kind', 'data'];

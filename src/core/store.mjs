@@ -20,11 +20,16 @@ import {
   getProject,
   ISSUE_SELECT,
   ISSUE_STATUSES,
+  milestoneNameKey,
+  MILESTONE_STATES,
+  normalizeMilestoneName,
   normalizeProjectKey,
   resolveIssue,
+  resolveMilestone,
   resolveProject,
   serializeEvent,
   serializeIssue,
+  serializeMilestone,
 } from './query.mjs';
 
 export { ISSUE_STATUSES };
@@ -204,13 +209,14 @@ export function listProjectsWithCounts(wrapper, { includeArchived = false } = {}
  *   labels?: string[]|string|null,
  *   assignee?: string|null,
  *   ref?: string|null,
+ *   milestone?: string|null,
  *   actor?: string,
  *   idem?: string|null,
  *   cwd?: string,
  *   env?: NodeJS.ProcessEnv
  * }} input
  * @returns {object} публичное представление задачи + deduplicated:boolean
- * @throws {UsageError|NotFoundError}
+ * @throws {UsageError|NotFoundError|ConflictError}
  */
 export function createIssue(wrapper, {
   project = null,
@@ -221,6 +227,7 @@ export function createIssue(wrapper, {
   labels = null,
   assignee = null,
   ref = null,
+  milestone = null,
   actor,
   idem = null,
   cwd,
@@ -252,6 +259,8 @@ export function createIssue(wrapper, {
       env,
     });
 
+    const attach = resolveMilestoneForIssue(db, projectRow.key, milestone);
+
     const maxRow = db
       .prepare('SELECT MAX(num) AS max_num FROM issues WHERE project_key = ?')
       .get(projectRow.key);
@@ -262,8 +271,8 @@ export function createIssue(wrapper, {
       .prepare(
         `INSERT INTO issues(
            project_key, num, title, body, status, priority, labels,
-           assignee, ref, created_at, updated_at, closed_at, close_reason, meta
-         ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, NULL, NULL, '{}')`,
+           assignee, ref, milestone_id, created_at, updated_at, closed_at, close_reason, meta
+         ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, NULL, NULL, '{}')`,
       )
       .run(
         projectRow.key,
@@ -274,15 +283,19 @@ export function createIssue(wrapper, {
         JSON.stringify(issueLabels),
         issueAssignee,
         issueRef,
+        attach?.id ?? null,
         now,
         now,
       );
 
     const issueRow = db.prepare(`${ISSUE_SELECT} WHERE i.id = ?`).get(Number(info.lastInsertRowid));
+    const createdData = {};
+    if (idemValue) createdData.idem = idemValue;
+    if (attach) createdData.milestone = attach.name;
     appendEvent(db, {
       issueId: issueRow.id,
       kind: 'created',
-      data: idemValue ? { idem: idemValue } : {},
+      data: createdData,
       actor: eventActor,
       ts: now,
     });
@@ -476,19 +489,19 @@ export function addComment(wrapper, { ref, text, actor, idem = null, env = proce
  * @param {{db: import('node:sqlite').DatabaseSync}} wrapper
  * @param {{
  *   ref: string|number,
- *   changes?: {title?: string, body?: string, priority?: number|string, labels?: string[]|string|{add?:string[],remove?:string[]}, assignee?: string|null, ref?: string|null},
+ *   changes?: {title?: string, body?: string, priority?: number|string, labels?: string[]|string|{add?:string[],remove?:string[]}, assignee?: string|null, ref?: string|null, milestone?: string|null},
  *   actor?: string,
  *   env?: NodeJS.ProcessEnv
  * }} input
  * @returns {{issue: object, events: object[]}}
- * @throws {UsageError|NotFoundError}
+ * @throws {UsageError|NotFoundError|ConflictError}
  */
 export function editIssue(wrapper, { ref, changes = {}, actor, env = process.env } = {}) {
   ensureInitialized(wrapper);
   if (changes === null || typeof changes !== 'object' || Array.isArray(changes)) {
     throw new UsageError('edit: изменения должны быть объектом.', { code: 'invalid_changes' });
   }
-  const allowedFields = ['title', 'body', 'priority', 'labels', 'assignee', 'ref'];
+  const allowedFields = ['title', 'body', 'priority', 'labels', 'assignee', 'ref', 'milestone'];
   for (const field of Object.keys(changes)) {
     if (!allowedFields.includes(field)) {
       throw new UsageError(
@@ -536,15 +549,32 @@ export function editIssue(wrapper, { ref, changes = {}, actor, env = process.env
         updates.push({ field: 'labels', from: current.labels, to: next });
       }
     }
+    if (changes.milestone !== undefined) {
+      const attach = resolveMilestoneForIssue(db, current.project, changes.milestone);
+      const nextName = attach?.name ?? null;
+      if (nextName !== current.milestone) {
+        updates.push({
+          field: 'milestone',
+          column: 'milestone_id',
+          from: current.milestone,
+          to: nextName,
+          value: attach?.id ?? null,
+        });
+      }
+    }
 
     if (updates.length === 0) {
       return { issue: current, events: [] };
     }
 
     const ts = Date.now();
-    const setSql = updates.map((update) => `${update.field} = ?`).join(', ');
+    const setSql = updates.map((update) => `${update.column ?? update.field} = ?`).join(', ');
     const values = updates.map((update) =>
-      update.field === 'labels' ? JSON.stringify(update.to) : update.to,
+      update.value !== undefined
+        ? update.value
+        : update.field === 'labels'
+          ? JSON.stringify(update.to)
+          : update.to,
     );
     db.prepare(`UPDATE issues SET ${setSql}, updated_at = ? WHERE id = ?`).run(
       ...values,
@@ -587,6 +617,7 @@ export function editIssue(wrapper, { ref, changes = {}, actor, env = process.env
  *   labels?: string[]|string|{add?:string[],remove?:string[]},
  *   assignee?: string|null,
  *   ref?: string|null,
+ *   milestone?: string|null,
  *   reason?: string|null,
  *   actor?: string,
  *   env?: NodeJS.ProcessEnv
@@ -603,6 +634,7 @@ export function updateIssue(wrapper, {
   labels,
   assignee,
   ref,
+  milestone,
   reason = null,
   actor,
   env = process.env,
@@ -685,11 +717,28 @@ export function updateIssue(wrapper, {
         edits.push({ field: 'labels', from: original.labels, to: next });
       }
     }
+    if (milestone !== undefined) {
+      const attach = resolveMilestoneForIssue(db, original.project, milestone);
+      const nextName = attach?.name ?? null;
+      if (nextName !== original.milestone) {
+        edits.push({
+          field: 'milestone',
+          column: 'milestone_id',
+          from: original.milestone,
+          to: nextName,
+          value: attach?.id ?? null,
+        });
+      }
+    }
 
     if (edits.length > 0) {
-      const setSql = edits.map((update) => `${update.field} = ?`).join(', ');
+      const setSql = edits.map((update) => `${update.column ?? update.field} = ?`).join(', ');
       const values = edits.map((update) =>
-        update.field === 'labels' ? JSON.stringify(update.to) : update.to,
+        update.value !== undefined
+          ? update.value
+          : update.field === 'labels'
+            ? JSON.stringify(update.to)
+            : update.to,
       );
       db.prepare(`UPDATE issues SET ${setSql}, updated_at = ? WHERE id = ?`).run(
         ...values,
@@ -714,6 +763,198 @@ export function updateIssue(wrapper, {
     }
 
     return { issue: current, events };
+  });
+}
+
+/**
+ * Создаёт милстоун в проекте (PLAN §13). События не пишутся: милстоун —
+ * атрибут проектного уровня, как и сам проект. Дубль имени (по name_key)
+ * в проекте → ConflictError milestone_exists.
+ * @param {{db: import('node:sqlite').DatabaseSync}} wrapper
+ * @param {{
+ *   project?: string|null,
+ *   projectKey?: string|null,
+ *   name: string,
+ *   body?: string,
+ *   due?: string|number|null,
+ *   dueAt?: string|number|null,
+ *   cwd?: string,
+ *   env?: NodeJS.ProcessEnv
+ * }} input
+ * @returns {object} публичное представление (§3.1), progress нулевой
+ * @throws {UsageError|ConflictError|NotFoundError}
+ */
+export function createMilestone(wrapper, {
+  project = null,
+  projectKey = null,
+  name,
+  body = '',
+  due = null,
+  dueAt = null,
+  cwd,
+  env = process.env,
+} = {}) {
+  ensureInitialized(wrapper);
+  const milestoneName = normalizeMilestoneName(name);
+  const milestoneBody = normalizeBody(body);
+  const dueValue = normalizeDueAt(dueAt ?? due);
+  const db = unwrapDb(wrapper);
+
+  return transaction(wrapper, () => {
+    const projectRow = resolveProject(db, {
+      project: projectKey ?? project,
+      cwd: cwd ?? process.cwd(),
+      env,
+    });
+    const nameKey = milestoneNameKey(milestoneName);
+    const existing = db
+      .prepare('SELECT id FROM milestones WHERE project_key = ? AND name_key = ?')
+      .get(projectRow.key, nameKey);
+    if (existing) {
+      throw new ConflictError(
+        `Милстоун «${milestoneName}» уже существует в проекте ${projectRow.key}.`,
+        { code: 'milestone_exists', hint: 'Посмотреть милстоуны: rat milestone ls' },
+      );
+    }
+
+    const now = Date.now();
+    db.prepare(
+      `INSERT INTO milestones(
+         project_key, name, name_key, body, due_at, state,
+         created_at, updated_at, closed_at, meta
+       ) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, NULL, '{}')`,
+    ).run(projectRow.key, milestoneName, nameKey, milestoneBody, dueValue, now, now);
+
+    return serializeMilestone(
+      resolveMilestone(db, { ref: milestoneName, projectKey: projectRow.key }),
+    );
+  });
+}
+
+/**
+ * Изменяет имя/описание/срок/состояние милстоуна. Все поля опциональны;
+ * отсутствующие не меняются. Пустой вызов возвращает текущее состояние.
+ * `clearDue` очищает срок; одновременная передача срока и `clearDue` —
+ * UsageError invalid_arguments.
+ * @param {{db: import('node:sqlite').DatabaseSync}} wrapper
+ * @param {{
+ *   ref: string,
+ *   project?: string|null,
+ *   projectKey?: string|null,
+ *   name?: string,
+ *   body?: string,
+ *   due?: string|number|null,
+ *   dueAt?: string|number|null,
+ *   clearDue?: boolean,
+ *   state?: 'open'|'closed',
+ *   cwd?: string,
+ *   env?: NodeJS.ProcessEnv
+ * }} input
+ * @returns {object} публичное представление (§3.1)
+ * @throws {UsageError|ConflictError|NotFoundError}
+ */
+export function updateMilestone(wrapper, {
+  ref,
+  project = null,
+  projectKey = null,
+  name,
+  body,
+  due = null,
+  dueAt = null,
+  clearDue = false,
+  state,
+  cwd,
+  env = process.env,
+} = {}) {
+  ensureInitialized(wrapper);
+  const db = unwrapDb(wrapper);
+
+  return transaction(wrapper, () => {
+    const projectRow = resolveProject(db, {
+      project: projectKey ?? project,
+      cwd: cwd ?? process.cwd(),
+      env,
+    });
+    const currentRow = resolveMilestone(db, { ref, projectKey: projectRow.key });
+    const current = serializeMilestone(currentRow);
+    const now = Date.now();
+    const sets = [];
+    const params = [];
+
+    let nextName = current.name;
+    if (name !== undefined) {
+      nextName = normalizeMilestoneName(name);
+      if (nextName !== current.name) {
+        const nextKey = milestoneNameKey(nextName);
+        const duplicate = db
+          .prepare(
+            `SELECT id FROM milestones
+             WHERE project_key = ? AND name_key = ? AND id <> ?`,
+          )
+          .get(projectRow.key, nextKey, currentRow.id);
+        if (duplicate) {
+          throw new ConflictError(
+            `Милстоун «${nextName}» уже существует в проекте ${projectRow.key}.`,
+            { code: 'milestone_exists', hint: 'Посмотреть милстоуны: rat milestone ls' },
+          );
+        }
+        sets.push('name = ?', 'name_key = ?');
+        params.push(nextName, nextKey);
+      }
+    }
+
+    if (body !== undefined) {
+      const nextBody = normalizeBody(body);
+      if (nextBody !== current.body) {
+        sets.push('body = ?');
+        params.push(nextBody);
+      }
+    }
+
+    const dueGiven = due !== null && due !== undefined;
+    const dueAtGiven = dueAt !== null && dueAt !== undefined;
+    if (clearDue && (dueGiven || dueAtGiven)) {
+      throw new UsageError('Нельзя одновременно задать срок и --clear-due.', {
+        code: 'invalid_arguments',
+      });
+    }
+
+    if (clearDue) {
+      if (current.due_at !== null) {
+        sets.push('due_at = ?');
+        params.push(null);
+      }
+    } else if (dueAtGiven || dueGiven) {
+      const nextDue = normalizeDueAt(dueAtGiven ? dueAt : due);
+      if (nextDue !== current.due_at) {
+        sets.push('due_at = ?');
+        params.push(nextDue);
+      }
+    }
+
+    if (state !== undefined && state !== null && state !== '') {
+      const nextState = String(state).trim().toLowerCase();
+      if (!MILESTONE_STATES.includes(nextState)) {
+        throw new UsageError(
+          `Недопустимое состояние «${state}». Допустимо: ${MILESTONE_STATES.join(', ')}.`,
+          { code: 'invalid_state' },
+        );
+      }
+      if (nextState !== current.state) {
+        sets.push('state = ?', 'closed_at = ?');
+        params.push(nextState, nextState === 'closed' ? now : null);
+      }
+    }
+
+    if (sets.length === 0) return current;
+
+    sets.push('updated_at = ?');
+    params.push(now, currentRow.id);
+    db.prepare(`UPDATE milestones SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+
+    return serializeMilestone(
+      resolveMilestone(db, { ref: nextName, projectKey: projectRow.key }),
+    );
   });
 }
 
@@ -901,6 +1142,89 @@ function normalizeOptionalText(value, field) {
   return text === '' ? null : text;
 }
 
+/**
+ * 'YYYY-MM-DD' → 00:00 UTC epoch ms; число → как есть; null → null.
+ * @param {unknown} value
+ * @returns {number|null}
+ * @throws {UsageError} invalid_due
+ */
+function normalizeDueAt(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      throw new UsageError('Срок: ожидается дата YYYY-MM-DD.', { code: 'invalid_due' });
+    }
+    return Math.trunc(value);
+  }
+  if (typeof value !== 'string') {
+    throw new UsageError('Срок: ожидается дата YYYY-MM-DD.', { code: 'invalid_due' });
+  }
+  const text = value.trim();
+  if (text === '') return null;
+
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (!match) {
+    throw new UsageError(`Срок «${value}»: ожидается дата YYYY-MM-DD.`, {
+      code: 'invalid_due',
+    });
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const ts = Date.UTC(year, month - 1, day);
+  const date = new Date(ts);
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    throw new UsageError(`Срок «${value}»: такой даты не существует.`, {
+      code: 'invalid_due',
+    });
+  }
+  return ts;
+}
+
+/**
+ * Привязка для задачи: значение `milestone` → {id, name} или null.
+ * null/''/'-'/'none' — отвязка. Имя ищется только в проекте задачи.
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {string} projectKey
+ * @param {unknown} value
+ * @returns {{id:number, name:string}|null}
+ * @throws {UsageError} invalid_milestone
+ * @throws {ConflictError} milestone_closed
+ */
+function resolveMilestoneForIssue(db, projectKey, value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string') {
+    throw new UsageError('Милстоун: ожидается имя, «-» или «none».', {
+      code: 'invalid_milestone',
+      hint: 'Посмотреть милстоуны: rat milestone ls',
+    });
+  }
+  const text = value.trim();
+  const key = milestoneNameKey(text);
+  if (key === '' || key === '-' || key === 'none') return null;
+
+  const row = db
+    .prepare('SELECT id, name, state FROM milestones WHERE project_key = ? AND name_key = ?')
+    .get(projectKey, key);
+  if (!row) {
+    throw new UsageError(`Милстоун «${text}» не найден в проекте ${projectKey}.`, {
+      code: 'invalid_milestone',
+      hint: 'Посмотреть милстоуны: rat milestone ls',
+    });
+  }
+  if (row.state !== 'open') {
+    throw new ConflictError(`Милстоун «${row.name}» закрыт — назначить его нельзя.`, {
+      code: 'milestone_closed',
+      hint: 'Открыть милстоун: rat milestone reopen',
+    });
+  }
+  return { id: Number(row.id), name: row.name };
+}
+
 function normalizeIdem(value) {
   if (value === null || value === undefined) return null;
   if (typeof value !== 'string') {
@@ -1076,6 +1400,39 @@ export function doctor(wrapper) {
     });
   }
 
+  const milestonesTable = safeTableExists(db, 'milestones');
+  if (!milestonesTable) {
+    checks.push({
+      id: 'milestones',
+      ok: false,
+      message: 'Нет таблицы milestones — выполните rat init',
+    });
+  } else if (!columnExists(db, 'issues', 'milestone_id')) {
+    checks.push({
+      id: 'milestones',
+      ok: false,
+      message: 'В таблице issues нет колонки milestone_id — выполните rat init',
+    });
+  } else {
+    try {
+      const total = Number(db.prepare('SELECT COUNT(*) AS n FROM milestones').get().n);
+      const open = Number(
+        db.prepare("SELECT COUNT(*) AS n FROM milestones WHERE state = 'open'").get().n,
+      );
+      checks.push({
+        id: 'milestones',
+        ok: true,
+        message: `Милстоуны: ${total} (open ${open})`,
+      });
+    } catch (err) {
+      checks.push({
+        id: 'milestones',
+        ok: false,
+        message: `Не удалось проверить милстоуны: ${err?.message ?? err}`,
+      });
+    }
+  }
+
   if (initialized) {
     try {
       const orphanIssues = db
@@ -1227,6 +1584,18 @@ function jsonProblem(raw, expected) {
 function safeTableExists(db, name) {
   try {
     return tableExists(db, name);
+  } catch {
+    return false;
+  }
+}
+
+/** Колонка таблицы через PRAGMA table_info (локально, без экспорта из db.mjs). */
+function columnExists(db, table, column) {
+  try {
+    return db
+      .prepare(`PRAGMA table_info(${table})`)
+      .all()
+      .some((row) => row.name === column);
   } catch {
     return false;
   }

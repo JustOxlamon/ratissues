@@ -33,6 +33,7 @@ const ISSUE_FIELD_ORDER = [
   'labels',
   'assignee',
   'ref',
+  'milestone',
   'created_at',
   'updated_at',
   'closed_at',

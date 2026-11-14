@@ -25,12 +25,29 @@ export const ISSUE_STATUSES = Object.freeze([
 /** Статусы, попадающие в `active`. `deferred` намеренно не входит (задача припаркована). */
 export const ACTIVE_STATUSES = Object.freeze(['open', 'doing', 'blocked']);
 
+/** Допустимые состояния милстоуна (PLAN §13). */
+export const MILESTONE_STATES = Object.freeze(['open', 'closed']);
+
+/** Максимальная длина имени милстоуна в символах. */
+export const MAX_MILESTONE_NAME_LENGTH = 200;
+
 /** Колонки задачи, которые нужны serializeIssue. */
 export const ISSUE_SELECT = `
   SELECT i.id, i.project_key, i.num, i.title, i.body, i.status, i.priority,
-         i.labels, i.assignee, i.ref, i.created_at, i.updated_at,
+         i.labels, i.assignee, i.ref,
+         (SELECT m.name FROM milestones m WHERE m.id = i.milestone_id) AS milestone,
+         i.created_at, i.updated_at,
          i.closed_at, i.close_reason, i.meta
   FROM issues i`;
+
+/** Колонки милстоуна + агрегаты прогресса (без JOIN/GROUP BY). */
+export const MILESTONE_SELECT = `
+  SELECT m.id, m.project_key, m.name, m.name_key, m.body, m.due_at, m.state,
+         m.created_at, m.updated_at, m.closed_at, m.meta,
+         (SELECT COUNT(*) FROM issues i WHERE i.milestone_id = m.id) AS total,
+         (SELECT COUNT(*) FROM issues i WHERE i.milestone_id = m.id AND i.status = 'done') AS done,
+         (SELECT COUNT(*) FROM issues i WHERE i.milestone_id = m.id AND i.status = 'cancelled') AS cancelled
+  FROM milestones m`;
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -253,6 +270,7 @@ export function serializeIssue(row) {
     labels: parseLabelsJson(row.labels),
     assignee: row.assignee ?? null,
     ref: row.ref ?? null,
+    milestone: row.milestone ?? null,
     created_at: Number(row.created_at),
     updated_at: Number(row.updated_at),
     closed_at: row.closed_at === null || row.closed_at === undefined ? null : Number(row.closed_at),
@@ -291,6 +309,163 @@ export function serializeEvent(event) {
 }
 
 // ---------------------------------------------------------------------------
+// Милстоуны (M7): чтение
+
+/**
+ * Нормализует имя милстоуна: trim, непустое, не длиннее 200 символов.
+ * @param {unknown} value
+ * @returns {string}
+ * @throws {UsageError} invalid_milestone_name
+ */
+export function normalizeMilestoneName(value) {
+  if (typeof value !== 'string') {
+    throw new UsageError('Имя милстоуна должно быть строкой.', {
+      code: 'invalid_milestone_name',
+    });
+  }
+  const name = value.trim();
+  if (name === '') {
+    throw new UsageError('Имя милстоуна не может быть пустым.', {
+      code: 'invalid_milestone_name',
+    });
+  }
+  if (name.length > MAX_MILESTONE_NAME_LENGTH) {
+    throw new UsageError(
+      `Имя милстоуна длиннее ${MAX_MILESTONE_NAME_LENGTH} символов (${name.length}).`,
+      { code: 'invalid_milestone_name' },
+    );
+  }
+  return name;
+}
+
+/**
+ * Ключ имени для UNIQUE(project_key, name_key): trim + toLowerCase.
+ * SQLite COLLATE NOCASE не понижает регистр кириллицы, поэтому нормализация
+ * делается в JS.
+ * @param {unknown} name
+ * @returns {string}
+ */
+export function milestoneNameKey(name) {
+  return String(name ?? '').trim().toLowerCase();
+}
+
+/**
+ * Строка milestones (+ агрегаты) → публичное представление (PLAN §13).
+ * @param {object} row
+ * @returns {object}
+ */
+export function serializeMilestone(row) {
+  const total = Number(row.total ?? 0);
+  const done = Number(row.done ?? 0);
+  const cancelled = Number(row.cancelled ?? 0);
+  const denominator = total - cancelled;
+  const percent = denominator > 0 ? Math.floor((done * 100) / denominator) : 0;
+  return {
+    project: row.project_key,
+    name: row.name,
+    body: row.body ?? '',
+    due_at: row.due_at === null || row.due_at === undefined ? null : Number(row.due_at),
+    state: row.state,
+    created_at: Number(row.created_at),
+    updated_at: Number(row.updated_at),
+    closed_at: row.closed_at === null || row.closed_at === undefined ? null : Number(row.closed_at),
+    progress: { total, done, cancelled, percent },
+  };
+}
+
+/**
+ * Сырая строка milestones (+ агрегаты) по имени в проекте.
+ * @param {{db: import('node:sqlite').DatabaseSync}|import('node:sqlite').DatabaseSync} wrapperOrDb
+ * @param {{ref: string, projectKey: string}} input
+ * @returns {object}
+ * @throws {UsageError} invalid_milestone
+ * @throws {NotFoundError} milestone_not_found
+ */
+export function resolveMilestone(wrapperOrDb, { ref, projectKey } = {}) {
+  const db = unwrapDb(wrapperOrDb);
+  const name = typeof ref === 'string' ? ref.trim() : '';
+  const scope = typeof projectKey === 'string' ? projectKey.trim() : '';
+  if (name === '' || scope === '') {
+    throw new UsageError('Не задан милстоун (имя) или проект.', {
+      code: 'invalid_milestone',
+      hint: 'Посмотрите милстоуны: rat milestone ls',
+    });
+  }
+  const row = db
+    .prepare(`${MILESTONE_SELECT} WHERE m.project_key = ? AND m.name_key = ?`)
+    .get(normalizeProjectKey(scope), milestoneNameKey(name));
+  if (!row) {
+    throw new NotFoundError(`Милстоун «${name}» не найден в проекте ${normalizeProjectKey(scope)}.`, {
+      code: 'milestone_not_found',
+      hint: 'Посмотрите милстоуны: rat milestone ls',
+    });
+  }
+  return row;
+}
+
+/**
+ * Публичное представление одного милстоуна.
+ * @param {{db: import('node:sqlite').DatabaseSync}} wrapper
+ * @param {{ref: string, project?: string|null, projectKey?: string|null, cwd?: string, env?: NodeJS.ProcessEnv}} input
+ * @returns {object}
+ */
+export function getMilestone(wrapper, {
+  ref,
+  project = null,
+  projectKey = null,
+  cwd = process.cwd(),
+  env = process.env,
+} = {}) {
+  const db = unwrapDb(wrapper);
+  const projectRow = resolveProject(db, { project: projectKey ?? project, cwd, env });
+  return serializeMilestone(resolveMilestone(db, { ref, projectKey: projectRow.key }));
+}
+
+/**
+ * Список милстоунов с прогрессом.
+ * `project = null` → все неархивные проекты; явный проект ищется и в архиве.
+ * @param {{db: import('node:sqlite').DatabaseSync}} wrapper
+ * @param {{project?: string|null, state?: 'open'|'closed'|'all', includeArchived?: boolean, cwd?: string, env?: NodeJS.ProcessEnv}} [options]
+ * @returns {object[]}
+ */
+export function listMilestones(wrapper, {
+  project = null,
+  state = 'open',
+  includeArchived = false,
+  cwd = process.cwd(),
+  env = process.env,
+} = {}) {
+  ensureReady(wrapper);
+  const db = unwrapDb(wrapper);
+  const stateFilter = normalizeMilestoneState(state);
+
+  const where = [];
+  const params = [];
+  const hasProject = project !== null && project !== undefined && String(project).trim() !== '';
+  if (hasProject) {
+    const projectRow = resolveProject(db, { project, cwd, env });
+    where.push('m.project_key = ?');
+    params.push(projectRow.key);
+  } else if (!includeArchived) {
+    where.push('m.project_key IN (SELECT key FROM projects WHERE archived_at IS NULL)');
+  }
+
+  if (stateFilter !== 'all') {
+    where.push('m.state = ?');
+    params.push(stateFilter);
+  }
+
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const orderSql =
+    "ORDER BY CASE m.state WHEN 'open' THEN 0 ELSE 1 END, (m.due_at IS NULL), m.due_at ASC, m.name_key ASC";
+
+  return db
+    .prepare(`${MILESTONE_SELECT} ${whereSql} ${orderSql}`)
+    .all(...params)
+    .map(serializeMilestone);
+}
+
+// ---------------------------------------------------------------------------
 // Чтение M2: поиск/списки, next, лента, статистика
 
 /**
@@ -308,6 +483,7 @@ export function serializeEvent(event) {
  *   label?: string|null,
  *   q?: string|null,
  *   priority?: number|string|null,
+ *   milestone?: string|null,
  *   limit?: number|string,
  *   sort?: 'pri'|'updated',
  *   cursor?: string|null
@@ -321,6 +497,7 @@ export function searchIssues(wrapper, {
   label = null,
   q = null,
   priority = null,
+  milestone = null,
   limit = 50,
   sort = 'pri',
   cursor = null,
@@ -373,6 +550,14 @@ export function searchIssues(wrapper, {
       baseWhere.push('i.priority BETWEEN ? AND ?');
       baseParams.push(priorityRange.min, priorityRange.max);
     }
+  }
+
+  const milestoneFilter = isEmpty(milestone) ? null : milestoneNameKey(milestone);
+  if (milestoneFilter === 'none') {
+    baseWhere.push('i.milestone_id IS NULL');
+  } else if (milestoneFilter !== null) {
+    baseWhere.push('i.milestone_id IN (SELECT id FROM milestones WHERE name_key = ?)');
+    baseParams.push(milestoneFilter);
   }
 
   const orderSql = sortMode === 'updated'
@@ -626,6 +811,21 @@ function normalizeStatusFilter(value) {
     );
   }
   return status;
+}
+
+function normalizeMilestoneState(value) {
+  if (value === null || value === undefined || value === '') return 'open';
+  if (typeof value !== 'string') {
+    throw new UsageError('Состояние милстоуна: ожидается строка.', {
+      code: 'invalid_state',
+    });
+  }
+  const state = value.trim().toLowerCase();
+  if (state === 'all' || MILESTONE_STATES.includes(state)) return state;
+  throw new UsageError(
+    `Недопустимое состояние «${value}». Допустимо: ${[...MILESTONE_STATES, 'all'].join(', ')}.`,
+    { code: 'invalid_state' },
+  );
 }
 
 function normalizeLabel(value) {

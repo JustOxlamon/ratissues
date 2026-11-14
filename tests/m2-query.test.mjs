@@ -21,6 +21,7 @@ const ISSUE_KEYS = [
   'id',
   'labels',
   'meta',
+  'milestone',
   'num',
   'priority',
   'project',

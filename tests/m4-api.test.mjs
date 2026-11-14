@@ -26,6 +26,7 @@ const ISSUE_KEYS = [
   'labels',
   'assignee',
   'ref',
+  'milestone',
   'created_at',
   'updated_at',
   'closed_at',

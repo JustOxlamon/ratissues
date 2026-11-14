@@ -136,17 +136,39 @@ export function seedIssue(db, {
   labels = '[]',
   assignee = null,
   ref = null,
+  milestoneId = null,
   meta = '{}',
   createdAt = Date.now(),
   updatedAt = createdAt,
 } = {}) {
+  const hasMilestone = db
+    .prepare('PRAGMA table_info(issues)')
+    .all()
+    .some((column) => column.name === 'milestone_id');
+  const columns = [
+    'project_key',
+    'num',
+    'title',
+    'body',
+    'status',
+    'priority',
+    'labels',
+    'assignee',
+    'ref',
+  ];
+  const values = [projectKey, num, title, body, status, priority, labels, assignee, ref];
+  if (hasMilestone) {
+    columns.push('milestone_id');
+    values.push(milestoneId);
+  }
+  columns.push('created_at', 'updated_at', 'meta');
+  values.push(createdAt, updatedAt, meta);
+
   const info = db
     .prepare(
-      `INSERT INTO issues(
-         project_key, num, title, body, status, priority, labels,
-         assignee, ref, created_at, updated_at, meta
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO issues(${columns.join(', ')})
+       VALUES (${columns.map(() => '?').join(', ')})`,
     )
-    .run(projectKey, num, title, body, status, priority, labels, assignee, ref, createdAt, updatedAt, meta);
+    .run(...values);
   return Number(info.lastInsertRowid);
 }
