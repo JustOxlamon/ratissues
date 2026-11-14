@@ -280,10 +280,13 @@ file.
 `localhost`, `::1`) and serves static files from `web/` plus the JSON API from
 `src/server/`. The UI lets you browse projects, the issue list, search, issue
 details, and the event feed, and lets you create issues, change statuses, assign
-milestones, and leave comments. The sidebar shows up to three open milestones
-per project with progress; the list has a milestone filter (within a project
-only) and milestone chips on issues. Changes are broadcast to all clients via
-SSE at `/api/stream`.
+milestones, leave comments, and manage the project's canon rules. The sidebar
+shows up to three open milestones per project with progress, plus a `Канон` link
+with the active-rule count. The list has a milestone filter (within a project
+only) and milestone chips on issues. The canon panel at `#/canon/<project>`
+lists the active rules, lets you add a new one and repeal or restore existing
+ones, and shows the repealed rules in a collapsed block. Changes are broadcast
+to all clients via SSE at `/api/stream`.
 
 ```bash
 npm run build:css   # rebuild web/app.css from web/tailwind.src.css
