@@ -8,6 +8,7 @@ import {
   getProject,
   ISSUE_SELECT,
   ISSUE_STATUSES,
+  listMilestones,
   listProjects,
   normalizeProjectKey,
   resolveProject,
@@ -241,17 +242,34 @@ function renderProject(wrapper, project, activeRows, deferredRows, closedRows) {
   const openSection = renderSection(wrapper, '## Открытые', activeRows);
   const deferredSection = renderSection(wrapper, '## Отложенные', deferredRows);
   const closedSection = renderSection(wrapper, '## Закрытые', closedRows);
+  const milestonesSection = renderMilestones(wrapper, project);
 
   return {
     content: [
       `# ${project.key} — ${project.name}${archived}`,
       summary,
+      ...(milestonesSection === null ? [] : [milestonesSection]),
       openSection.content,
       deferredSection.content,
       closedSection.content,
     ].join('\n\n'),
     events: openSection.events + deferredSection.events + closedSection.events,
   };
+}
+
+function renderMilestones(wrapper, project) {
+  const milestones = listMilestones(wrapper, { project: project.key, state: 'all' });
+  if (milestones.length === 0) return null;
+
+  const lines = ['## Милстоуны'];
+  for (const milestone of milestones) {
+    const { progress } = milestone;
+    const due = milestone.due_at === null ? '' : ` · до ${formatDate(milestone.due_at)}`;
+    lines.push(
+      `- **${milestone.name}** · ${milestone.state} · ${progress.done}/${progress.total} (${progress.percent}%)${due}`,
+    );
+  }
+  return lines.join('\n');
 }
 
 function renderSection(wrapper, title, rows) {
@@ -294,6 +312,7 @@ function renderMeta(issue) {
     `метки: ${issue.labels.length ? issue.labels.join(', ') : '—'}`,
     `исполнитель: ${issue.assignee ?? '—'}`,
     `ref: ${issue.ref ?? '—'}`,
+    `милстоун: ${issue.milestone ?? '—'}`,
     `создана: ${formatTs(issue.created_at)}`,
     `обновлена: ${formatTs(issue.updated_at)}`,
   ];
@@ -456,6 +475,11 @@ function formatTs(ts) {
   if (ts === null || ts === undefined || !Number.isFinite(Number(ts))) return '—';
   const iso = new Date(Number(ts)).toISOString();
   return `${iso.slice(0, 10)} ${iso.slice(11, 16)}`;
+}
+
+/** epoch ms → «YYYY-MM-DD» (UTC): сроки милстоунов показываем без времени. */
+function formatDate(ts) {
+  return formatTs(ts).slice(0, 10);
 }
 
 function oneLine(text) {
