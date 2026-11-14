@@ -9,14 +9,14 @@ CLI с JSON-выводом для LLM и простой web UI (Tailwind, dark) 
 - Удаления нет: задача уходит в `cancelled`, комментарии неизменяемы (правка —
   новый комментарий).
 
-Готовы этапы **M0–M6**: схема и миграции, проекты, полный цикл задач, поиск,
-лента событий, статистика, экспорт в `md`/`jsonl`, HTTP API, `rat serve`,
-запись из UI (новая задача, статусы, комментарии), SSE, клавиатура, адаптив
-и полировка интерфейса.
+Готовы этапы **M0–M7**: схема и миграции, проекты, полный цикл задач, поиск,
+лента событий, статистика, милстоуны с прогрессом, экспорт в `md`/`jsonl`,
+HTTP API, `rat serve`, запись из UI (новая задача, статусы, милстоуны,
+комментарии), SSE, клавиатура, адаптив и полировка интерфейса.
 
-**M7 (милстоуны)** пока только в плане (`PLAN.md` §13): схема v3 с таблицей
-`milestones` и `issues.milestone_id` уже мигрируется, но команды, API и UI
-появятся отдельным этапом. В таблице команд ниже их намеренно нет.
+Милстоуны (PLAN §13) — это именованные вехи внутри проекта (например `v1.0`):
+задача может быть привязана к одной вехе, прогресс считается как
+`done / (total − cancelled)`. Удаления нет: веха бывает `open` или `closed`.
 
 ## Требования
 
@@ -91,10 +91,14 @@ cd /d/any/other/project && rat project ls --json && rat ls --json
 | `rat project add KEY --name "..."` | новый проект | `--path DIR`, `--color SLUG`, `--json` |
 | `rat project ls` | проекты и счётчики по статусам | `--all` (с архивом), `--json` |
 | `rat project archive KEY` | скрыть проект из списков, не удаляя задачи | `--json` |
-| `rat add "title"` | создать задачу | `--project K`, `--body TEXT\|-`, `--label a,b`, `--priority 0..3`, `--ref`, `--assignee`, `--idem UUID`, `--json` |
-| `rat ls [project]` | список задач | `-s open\|doing\|blocked\|deferred\|done\|cancelled\|active\|all`, `--label`, `--priority N\|pN\|0..1`, `-q TEXT`, `--limit N`, `--sort pri\|updated`, `--cursor C`, `--all`, `--json` |
+| `rat milestone add NAME` | новый милстоун проекта | `--project K`, `--body T\|-`, `--due YYYY-MM-DD`, `--json` |
+| `rat milestone ls [project]` | милстоуны и прогресс `done/total (N%)` | `--state open\|closed\|all`, `--json` |
+| `rat milestone edit NAME` | имя, описание, срок (все поля опциональны) | `--project K`, `--name`, `--body T\|-`, `--due`, `--clear-due`, `--json` |
+| `rat milestone close NAME` / `reopen NAME` | закрыть/открыть веху (повтор — no-op) | `--project K`, `--json` |
+| `rat add "title"` | создать задачу | `--project K`, `--body TEXT\|-`, `--label a,b`, `--priority 0..3`, `--ref`, `--milestone NAME`, `--assignee`, `--idem UUID`, `--json` |
+| `rat ls [project]` | список задач | `-s open\|doing\|blocked\|deferred\|done\|cancelled\|active\|all`, `--label`, `--milestone NAME\|none`, `--priority N\|pN\|0..1`, `-q TEXT`, `--limit N`, `--sort pri\|updated`, `--cursor C`, `--all`, `--json` |
 | `rat show ID` | задача + последние события | `--events N` (default 20), `--json` |
-| `rat edit ID` | правка полей, каждое изменение → событие `edit` | `--title T\|-`, `--body T\|-`, `--priority`, `--label +x,-y`, `--assignee`, `--ref`, `--json` |
+| `rat edit ID` | правка полей, каждое изменение → событие `edit` | `--title T\|-`, `--body T\|-`, `--priority`, `--label +x,-y`, `--assignee`, `--ref`, `--milestone NAME\|-`, `--json` |
 | `rat status ID <status>` | сменить статус | `--reason TEXT`, `--json` |
 | `rat done ID` / `rat cancel ID` / `rat reopen ID` | сахар над `status` | `--reason TEXT`, `--json` |
 | `rat claim ID` | взять в работу: `doing` + `assignee=$RAT_ACTOR` | `--json` |
@@ -177,11 +181,14 @@ cd /d/any/other/project && rat project ls --json && rat ls --json
 | `rat export ... --out FILE` | указанный файл |
 | `rat export ... --out -` | stdout, ровно снапшот, без баннеров (для piping) |
 
-`md` — человекочитаемый файл: заголовок проекта и сводка, затем «Открытые»
+`md` — человекочитаемый файл: заголовок проекта и сводка, блок «Милстоуны»
+(если у проекта они есть: состояние, `done/total (N%)` и срок), затем «Открытые»
 (`open`/`doing`/`blocked`, по приоритету и давности обновления), «Отложенные»
 (`deferred`, по давности обновления) и «Закрытые» (`done`/`cancelled`, по времени
-закрытия), у каждой задачи метаданные, тело и последние 10 событий. `jsonl` — по одному JSON-объекту в строке со стабильным
-порядком полей: задача — как в `rat ls --json`, событие (`--events`) —
+закрытия), у каждой задачи метаданные (включая `милстоун:`), тело и последние
+10 событий. `jsonl` — по одному JSON-объекту в строке со стабильным
+порядком полей: задача — как в `rat ls --json` (поле `milestone` — имя вехи
+или `null`, стоит после `ref`), событие (`--events`) —
 `id, issue, project, ts, actor, kind, data`. Порядок записей тоже стабилен:
 задачи — `project`, затем `num`; события — `ts`, затем `id`. Это позволяет
 детерминированно диффать снапшоты и целиком загружать jsonl в контекст LLM.
@@ -232,8 +239,11 @@ cd /d/any/other/project && rat project ls --json && rat ls --json
 `rat serve` поднимает локальный сервер только на loopback (`127.0.0.1`,
 `localhost`, `::1`) и отдаёт статику из `web/` + JSON API из `src/server/`.
 Интерфейс позволяет смотреть проекты, список задач, поиск, детальную карточку,
-ленту событий, а также создавать задачи, менять статусы и оставлять
-комментарии. Изменения рассылаются всем клиентам через SSE `/api/stream`.
+ленту событий, а также создавать задачи, менять статусы, назначать милстоуны
+и оставлять комментарии. В сайдбаре у каждого проекта видны до трёх открытых
+милстоунов с прогрессом; в списке есть фильтр по милстоуну (только внутри
+проекта) и чипы у задач. Изменения рассылаются всем клиентам через SSE
+`/api/stream`.
 
 ```bash
 npm run build:css   # пересобрать web/app.css из web/tailwind.src.css
@@ -277,17 +287,24 @@ Tailwind — devDependency (`tailwindcss` + `@tailwindcss/cli`), компили�
 ```
 GET    /api/projects
 POST   /api/projects                      {key,name,root_path,color}
-GET    /api/issues?project&status&label&q&priority&limit&cursor&sort
-POST   /api/issues                        {project,title,body,priority,labels,ref,actor,idem}
+GET    /api/issues?project&status&label&q&priority&milestone&limit&cursor&sort
+POST   /api/issues                        {project,title,body,priority,labels,ref,milestone,actor,idem}
 GET    /api/issues/:id                    :id = RAT-12 | 12
-PATCH  /api/issues/:id                    {status,title,body,priority,labels,assignee,ref,actor,reason}
+PATCH  /api/issues/:id                    {status,title,body,priority,labels,assignee,ref,milestone,actor,reason}
 POST   /api/issues/:id/comments           {text,actor,idem}
 GET    /api/issues/:id/events?limit
+GET    /api/milestones?project&state&all
+POST   /api/milestones                    {project,name,body,due_at}
+PATCH  /api/milestones/:ref?project       {name,body,due_at,clear_due,state}
 GET    /api/log?project&since&kind&limit
 GET    /api/stats
 GET    /api/export?format=md|jsonl&project&events&all&limit
 GET    /api/stream                        SSE (Last-Event-ID)
 ```
+
+`milestone` в задачах — имя вехи (уникально внутри проекта) или `null`;
+`milestone=none` в `GET /api/issues` — задачи без вехи. Для
+`PATCH /api/milestones/:ref` проект передаётся в query (`?project=K`) или в теле.
 
 Один доменный слой `src/core/store.mjs` для CLI и API — поведение и валидация
 не расходятся. UI никогда не пишет в базу напрямую.
@@ -307,6 +324,7 @@ src/server/api.mjs     JSON API + SSE
 src/server/http.mjs    node:http сервер: API + статика
 src/cli/index.mjs      разбор argv, роутинг, help, коды выхода
 src/cli/commands/*.mjs по команде на файл
+src/cli/commands/milestone.mjs  add/ls/edit/close/reopen милстоунов
 src/cli/args.mjs       флаги, stdin
 src/cli/ui.mjs         цвета, форматирование времени и событий
 web/index.html         SPA UI
