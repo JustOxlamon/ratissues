@@ -89,6 +89,13 @@ node bin/rat.mjs serve --port 4711    # web UI + API только на loopback
   `percent` округляется вниз, при нулевом знаменателе `0`. Привязка/отвязка —
   событие `edit {field:"milestone"}`, отдельного `events.kind` нет. Веха не
   удаляется, только `close`.
+- Канон: таблица `canon`, публичный id `KEY-C1` (num по проекту; аллокация
+  `BEGIN IMMEDIATE` → `max(num)+1`, как у задач). Состояния `active`/`repealed`,
+  удаления нет. Правило проектного уровня, как милстоуны: собственных событий
+  в `events` не пишет, аудит — в полях записи (`created_by`/`repealed_by`/
+  `repeal_reason`). `--supersedes` одной транзакцией ставит заменяемое правило
+  в `repealed` и пишет перекрёстные ссылки (`supersedes`/`meta.superseded_by`).
+  Единственный писатель — `store.mjs` (create/update/repeal/reactivate).
 - Миграции применяет только `rat init`. Команды на базе с чужой
   версией схемы не «догоняют» её сами, а падают `DbError` с кодом
   `schema_outdated` (exit 4) и подсказкой `rat init`; `doctor` показывает FAIL

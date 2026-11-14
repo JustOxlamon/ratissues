@@ -17,7 +17,8 @@ for humans.
 
 Implemented: schema and migrations, projects, the full issue lifecycle (create,
 statuses, edits, comments), search, event feed, statistics, milestones with
-progress, `md`/`jsonl` export, automatic backups, HTTP API, `rat serve`, a
+progress, canon (`KEY-C#` standing project decisions), `md`/`jsonl` export,
+automatic backups, HTTP API, `rat serve`, a
 write-capable web UI (new issue, statuses, milestones, comments), SSE, keyboard
 navigation, and responsive layout.
 
@@ -25,6 +26,16 @@ Milestones are named checkpoints inside a project (for example `v1.0`): an
 issue can belong to one milestone, and progress is calculated as
 `done / (total − cancelled)`. Nothing is deleted: a milestone is either `open`
 or `closed`.
+
+Canon holds a project's standing decisions from forks ("do it this way / not
+that"). Each canon entry is a short directive (`title`) plus context (`body` and
+an optional `--source` issue), addressed to operators and LLM agents working in
+the project. A canon entry is `KEY-C1`, `KEY-C2`, … (unique per project). It is
+`active` unless explicitly `repealed`; nothing is deleted. `rat canon add …
+--supersedes KEY-Cn` retires an old rule while adding a new one and records the
+link on both. Canon entries are project-scoped attributes like milestones: they
+write no events (their audit lives in the entry fields), and a rule's text is
+editable with `rat canon edit`.
 
 ## Requirements
 
@@ -107,6 +118,11 @@ Format: `rat <command> [project] [arguments] [flags]`.
 | `rat milestone ls [project]` | milestones and `done/total (N%)` progress | `--state open\|closed\|all`, `--json` |
 | `rat milestone edit NAME` | rename, describe, or reschedule (all fields optional) | `--project K`, `--name`, `--body T\|-`, `--due`, `--clear-due`, `--json` |
 | `rat milestone close NAME` / `reopen NAME` | close/reopen a milestone (repeat is a no-op) | `--project K`, `--json` |
+| `rat canon add TITLE` | create an active canon rule | `--project K`, `--body TEXT\|-`, `--priority 0..3`, `--label a,b`, `--source RAT-7`, `--supersedes KEY-Cn`, `--json` |
+| `rat canon ls [project]` | current canon (active rules) | `--state active\|repealed\|all`, `--label x`, `-q TEXT`, `--json` |
+| `rat canon show REF` | one rule, full fields | `--project K`, `--json` |
+| `rat canon edit REF` | edit rule fields | `--title T\|-`, `--body T\|-`, `--priority`, `--label +a,-b`, `--project K`, `--json` |
+| `rat canon repeal REF` / `reactivate REF` | retire / restore a rule (repeat is a no-op) | `--project K`, `--reason TEXT` (repeal), `--json` |
 | `rat add "title"` | create an issue | `--project K`, `--body TEXT\|-`, `--label a,b`, `--priority 0..3`, `--ref`, `--milestone NAME`, `--assignee`, `--idem UUID`, `--json` |
 | `rat ls [project]` | list issues | `-s open\|doing\|blocked\|deferred\|done\|cancelled\|active\|all`, `--label`, `--milestone NAME\|none`, `--priority N\|pN\|0..1`, `-q TEXT`, `--limit N`, `--sort pri\|updated`, `--cursor C`, `--all`, `--json` |
 | `rat show ID` | an issue plus its latest events | `--events N` (default 20), `--json` |
@@ -200,18 +216,20 @@ written atomically (temporary file + rename).
 | `rat export ... --out FILE` | the specified file |
 | `rat export ... --out -` | stdout: exactly the snapshot, no banners (for piping) |
 
-`md` is a human-readable file: project heading and summary, a “Milestones”
-block (when the project has any: state, `done/total (N%)`, and due date), then
-“Open” (`open`/`doing`/`blocked`, by priority and update age), “Deferred”
-(`deferred`, by update age), and “Closed” (`done`/`cancelled`, by close time).
-Each issue includes metadata (with `milestone:`), its body, and the last 10
-events. `jsonl` is one JSON object per line with a stable field order: an issue
-matches `rat ls --json` (`milestone` is the milestone name or `null`, placed
-after `ref`), and an event (`--events`) is
-`id, issue, project, ts, actor, kind, data`. Record order is stable too: issues
-by `project` then `num`; events by `ts` then `id`. This makes snapshots
-deterministic for git diffs and lets you feed the whole jsonl into an LLM
-context.
+`md` is a human-readable file: project heading and summary, a “Canon” block
+(active `KEY-C#` rules with priority, source and body) when the project has any,
+a “Milestones” block (when the project has any: state, `done/total (N%)`, and
+due date), then “Open” (`open`/`doing`/`blocked`, by priority and update age),
+“Deferred” (`deferred`, by update age), and “Closed” (`done`/`cancelled`, by
+close time). Each issue includes metadata (with `milestone:`), its body, and
+the last 10 events. `jsonl` is one JSON object per line with a stable field
+order: an issue matches `rat ls --json` (`milestone` is the milestone name or
+`null`, placed after `ref`), an event (`--events`) is
+`id, issue, project, ts, actor, kind, data`, and a canon entry is
+`{"type":"canon", …}`. Record order is stable too: canon first by `project`
+then `num`, then issues by `project` then `num`, then events by `ts` then `id`.
+This makes snapshots deterministic for git diffs and lets you feed the whole
+jsonl into an LLM context — the canon records put the project's rules first.
 
 `--events` is allowed only with `--format jsonl` (otherwise exit code `2`).
 When writing to a file, `--json` prints
@@ -318,6 +336,9 @@ GET    /api/issues/:id/events?limit
 GET    /api/milestones?project&state&all
 POST   /api/milestones                    {project,name,body,due_at}
 PATCH  /api/milestones/:ref?project       {name,body,due_at,clear_due,state}
+GET    /api/canon?project&state&label&q
+POST   /api/canon                         {project,title,body,priority,labels,source,supersedes,actor}
+PATCH  /api/canon/:ref?project            {title,body,priority,labels,state,reason,actor}
 GET    /api/log?project&since&kind&limit
 GET    /api/stats
 GET    /api/export?format=md|jsonl&project&events&all&limit
@@ -327,7 +348,9 @@ GET    /api/stream                        SSE (Last-Event-ID)
 On issues, `milestone` is the milestone name (unique within a project) or
 `null`; `milestone=none` in `GET /api/issues` selects issues without a
 milestone. For `PATCH /api/milestones/:ref`, pass the project in the query
-string (`?project=K`) or in the body.
+string (`?project=K`) or in the body. For `PATCH /api/canon/:ref`, the project
+is always required (query or body); `state: "repealed" | "active"` retires or
+restores a rule.
 
 CLI and API share one domain layer, `src/core/store.mjs`, so behavior and
 validation never diverge. The UI never writes to the database directly.
@@ -348,6 +371,7 @@ src/server/http.mjs    node:http server: API + static files
 src/cli/index.mjs      argv parsing, routing, help, exit codes
 src/cli/commands/*.mjs one file per command
 src/cli/commands/milestone.mjs  add/ls/edit/close/reopen for milestones
+src/cli/commands/canon.mjs      add/ls/show/edit/repeal/reactivate for canon
 src/cli/args.mjs       flags, stdin
 src/cli/ui.mjs         colors, time and event formatting
 web/index.html         SPA UI

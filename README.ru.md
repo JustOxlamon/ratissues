@@ -15,12 +15,23 @@ CLI с JSON-выводом для LLM и простой web UI (Tailwind, dark) 
 
 Реализовано: схема и миграции, проекты, полный цикл задач (создание, статусы,
 правка, комментарии), поиск, лента событий, статистика, милстоуны с прогрессом,
-экспорт `md`/`jsonl`, автобекапы, HTTP API, `rat serve`, web UI с записью
+канон (`KEY-C#` — актуальные решения проекта), экспорт `md`/`jsonl`,
+автобекапы, HTTP API, `rat serve`, web UI с записью
 (новая задача, статусы, милстоуны, комментарии), SSE, клавиатура, адаптив.
 
 Милстоуны — это именованные вехи внутри проекта (например `v1.0`):
 задача может быть привязана к одной вехе, прогресс считается как
 `done / (total − cancelled)`. Удаления нет: веха бывает `open` или `closed`.
+
+Канон — актуальные решения проекта из развилок («делай так / вот так не делай»).
+Каждое правило — короткая директива (`title`) + контекст (`body` и опциональный
+`--source` задачи), адресовано оператору и агентам-LLM, работающим в проекте.
+Правило адресуется `KEY-C1`, `KEY-C2`, … (уникально в проекте). Оно `active`,
+пока явно не отменено `repealed`; удаления нет. `rat canon add … --supersedes
+KEY-Cn` одной операцией добавляет новое правило и «выходит из строя» старое,
+ставя на обоих ссылку. Правила канона — атрибуты проектного уровня, как
+милстоуны: собственных событий в `events` не пишут (аудит — в полях записи), а
+текст правила правится через `rat canon edit`.
 
 ## Требования
 
@@ -103,6 +114,11 @@ cd /d/any/other/project && rat project ls --json && rat ls --json
 | `rat milestone ls [project]` | милстоуны и прогресс `done/total (N%)` | `--state open\|closed\|all`, `--json` |
 | `rat milestone edit NAME` | имя, описание, срок (все поля опциональны) | `--project K`, `--name`, `--body T\|-`, `--due`, `--clear-due`, `--json` |
 | `rat milestone close NAME` / `reopen NAME` | закрыть/открыть веху (повтор — no-op) | `--project K`, `--json` |
+| `rat canon add TITLE` | создать активное канон-правило | `--project K`, `--body TEXT\|-`, `--priority 0..3`, `--label a,b`, `--source RAT-7`, `--supersedes KEY-Cn`, `--json` |
+| `rat canon ls [project]` | актуальные правила (канон) | `--state active\|repealed\|all`, `--label x`, `-q TEXT`, `--json` |
+| `rat canon show REF` | одно правило со всеми полями | `--project K`, `--json` |
+| `rat canon edit REF` | правка полей правила | `--title T\|-`, `--body T\|-`, `--priority`, `--label +a,-b`, `--project K`, `--json` |
+| `rat canon repeal REF` / `reactivate REF` | отменить / вернуть правило (повтор — no-op) | `--project K`, `--reason TEXT` (repeal), `--json` |
 | `rat add "title"` | создать задачу | `--project K`, `--body TEXT\|-`, `--label a,b`, `--priority 0..3`, `--ref`, `--milestone NAME`, `--assignee`, `--idem UUID`, `--json` |
 | `rat ls [project]` | список задач | `-s open\|doing\|blocked\|deferred\|done\|cancelled\|active\|all`, `--label`, `--milestone NAME\|none`, `--priority N\|pN\|0..1`, `-q TEXT`, `--limit N`, `--sort pri\|updated`, `--cursor C`, `--all`, `--json` |
 | `rat show ID` | задача + последние события | `--events N` (default 20), `--json` |
@@ -193,21 +209,25 @@ cd /d/any/other/project && rat project ls --json && rat ls --json
 | `rat export ... --out FILE` | указанный файл |
 | `rat export ... --out -` | stdout, ровно снапшот, без баннеров (для piping) |
 
-`md` — человекочитаемый файл: заголовок проекта и сводка, блок «Милстоуны»
-(если у проекта они есть: состояние, `done/total (N%)` и срок), затем «Открытые»
-(`open`/`doing`/`blocked`, по приоритету и давности обновления), «Отложенные»
-(`deferred`, по давности обновления) и «Закрытые» (`done`/`cancelled`, по времени
-закрытия), у каждой задачи метаданные (включая `милстоун:`), тело и последние
-10 событий. `jsonl` — по одному JSON-объекту в строке со стабильным
-порядком полей: задача — как в `rat ls --json` (поле `milestone` — имя вехи
-или `null`, стоит после `ref`), событие (`--events`) —
-`id, issue, project, ts, actor, kind, data`. Порядок записей тоже стабилен:
-задачи — `project`, затем `num`; события — `ts`, затем `id`. Это позволяет
-детерминированно диффать снапшоты и целиком загружать jsonl в контекст LLM.
+`md` — человекочитаемый файл: заголовок проекта и сводка, блок «Канон»
+(активные `KEY-C#` правила с приоритетом, источником и телом), блок
+«Милстоуны» (если у проекта они есть: состояние, `done/total (N%)` и срок),
+затем «Открытые» (`open`/`doing`/`blocked`, по приоритету и давности
+обновления), «Отложенные» (`deferred`, по давности обновления) и «Закрытые»
+(`done`/`cancelled`, по времени закрытия), у каждой задачи метаданные (включая
+`милстоун:`), тело и последние 10 событий. `jsonl` — по одному JSON-объекту в
+строке со стабильным порядком полей: задача — как в `rat ls --json` (поле
+`milestone` — имя вехи или `null`, стоит после `ref`), событие (`--events`) —
+`id, issue, project, ts, actor, kind, data`, канон-правило —
+`{"type":"canon", …}`. Порядок записей тоже стабилен: канон — `project`, затем
+`num`; задачи — `project`, затем `num`; события — `ts`, затем `id`. Это
+позволяет детерминированно диффать снапшоты и целиком загружать jsonl в
+контекст LLM — правила канона идут первыми.
 
 `--events` допустим только с `--format jsonl` (иначе код выхода `2`).
 `--json` при записи в файл печатает объект
-`{path, format, bytes, projects, issues, events}`; с `--out -` он несовместим.
+`{path, format, bytes, projects, issues, events, canon}`; с `--out -` он
+несовместим.
 
 Рекомендация: коммитить `exports/` в git проекта — получается
 бесплатная история трекера без GitHub Issues. В этом репозитории `exports/`
@@ -308,6 +328,9 @@ GET    /api/issues/:id/events?limit
 GET    /api/milestones?project&state&all
 POST   /api/milestones                    {project,name,body,due_at}
 PATCH  /api/milestones/:ref?project       {name,body,due_at,clear_due,state}
+GET    /api/canon?project&state&label&q
+POST   /api/canon                         {project,title,body,priority,labels,source,supersedes,actor}
+PATCH  /api/canon/:ref?project            {title,body,priority,labels,state,reason,actor}
 GET    /api/log?project&since&kind&limit
 GET    /api/stats
 GET    /api/export?format=md|jsonl&project&events&all&limit
@@ -317,6 +340,8 @@ GET    /api/stream                        SSE (Last-Event-ID)
 `milestone` в задачах — имя вехи (уникально внутри проекта) или `null`;
 `milestone=none` в `GET /api/issues` — задачи без вехи. Для
 `PATCH /api/milestones/:ref` проект передаётся в query (`?project=K`) или в теле.
+Для `PATCH /api/canon/:ref` проект обязателен всегда (query или тело);
+`state: "repealed" | "active"` отменяет или возвращает правило.
 
 Один доменный слой `src/core/store.mjs` для CLI и API — поведение и валидация
 не расходятся. UI никогда не пишет в базу напрямую.
@@ -337,6 +362,7 @@ src/server/http.mjs    node:http сервер: API + статика
 src/cli/index.mjs      разбор argv, роутинг, help, коды выхода
 src/cli/commands/*.mjs по команде на файл
 src/cli/commands/milestone.mjs  add/ls/edit/close/reopen милстоунов
+src/cli/commands/canon.mjs      add/ls/show/edit/repeal/reactivate канона
 src/cli/args.mjs       флаги, stdin
 src/cli/ui.mjs         цвета, форматирование времени и событий
 web/index.html         SPA UI

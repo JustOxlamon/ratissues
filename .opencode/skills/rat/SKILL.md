@@ -1,6 +1,6 @@
 ---
 name: rat
-description: "Use when tracking work in the local rat task tracker (RAT-1 style ids, `rat` CLI): listing or picking the next task, claiming/starting work, commenting progress, closing tasks, adding tasks, searching the backlog, managing milestones (вехи v1.0), or exporting project context. Also use when the user says «возьми задачу», «что дальше», «заведи задачу», «закоммить итог в трекер», mentions rat, RAT-n, a milestone, or a project tracked in the local issue DB."
+description: "Use when tracking work in the local rat task tracker (RAT-1 style ids, `rat` CLI): listing or picking the next task, claiming/starting work, commenting progress, closing tasks, adding tasks, searching the backlog, managing milestones (вехи v1.0), managing project canon rules (канон — «делай так / не делай так»), or exporting project context. Also use when the user says «возьми задачу», «что дальше», «заведи задачу», «закоммить итог в трекер», mentions rat, RAT-n, a milestone, a canon rule (канон), or a project tracked in the local issue DB."
 ---
 
 # rat — локальный трекер задач
@@ -52,6 +52,11 @@ rat done RAT-7 --reason "тесты зелёные"
 | `rat milestone ls [project]` | вехи с прогрессом `done/total (N%)` (`--state open\|closed\|all`) |
 | `rat milestone edit NAME` | `--name`, `--body`, `--due`, `--clear-due`; пустой вызов — показать |
 | `rat milestone close NAME` / `reopen NAME` | закрыть/открыть (повтор — no-op) |
+| `rat canon add TITLE` | новое канон-правило (`--body T\|-`, `--priority 0..3`, `--label a,b`, `--source RAT-7`, `--supersedes KEY-Cn`) |
+| `rat canon ls [project]` | активные правила канона (`--state active\|repealed\|all`, `--label`, `-q`) |
+| `rat canon show REF` | одно правило (поля, источник, замена/отмена) |
+| `rat canon edit REF` | правка полей правила (`--title`, `--body`, `--priority`, `--label +a,-b`) |
+| `rat canon repeal REF` / `reactivate REF` | отменить / вернуть правило (`--reason`) |
 | `rat add "title"` | создать (`--project K`, `--body TEXT\|-`, `--label a,b`, `--priority 0..3`, `--ref`, `--milestone NAME`, `--assignee`, `--idem UUID`) |
 | `rat ls [project]` | список (`-s open\|doing\|blocked\|deferred\|done\|cancelled\|active\|all`, `--label`, `--milestone NAME\|none`, `--priority`, `-q TEXT`, `--limit`, `--sort pri\|updated`, `--all`) |
 | `rat show ID` | задача + последние события (`--events N`), в выводе есть милстоун |
@@ -99,6 +104,35 @@ rat milestone reopen v1.0 --project AXEL
   задачах поле `milestone` (имя или `null`), фильтр `?milestone=none`.
 - Экспорт: в `md` — блок `## Милстоуны` и `милстоун:` в мете задачи; в `jsonl`
   поле `milestone` стоит после `ref`.
+
+## Канон (правила проекта)
+
+Канон — актуальные решения проекта из развилок («делай так / вот так не
+делай»). У правила есть директива (`title`), контекст (`--body`), приоритет,
+метки и опциональный источник развилки (`--source RAT-7`). Адрес — `KEY-C1`
+(номер по проекту). Это то, что оператор и LLM должны знать о проекте наверняка.
+
+```bash
+rat canon ls --project AXEL --json           # актуальные правила (читай перед работой)
+rat canon add "Не добавлять npm-зависимости" --project AXEL --body "только node:*" --source AXEL-7
+rat canon add "Перешли на vite" --project AXEL --supersedes AXEL-C1   # ставит AXEL-C1 в repealed
+rat canon show AXEL-C2 --json
+rat canon edit AXEL-C2 --body "..." --label +runtime,-deps
+rat canon repeal AXEL-C2 --reason "развилка решена иначе"   # повтор — no-op
+rat canon reactivate AXEL-C2                                 # вернуть в активные
+```
+
+- Перед работой в проекте читай активные правила: `rat canon ls --project K
+  --json`; после прохождения развилки фиксируй решение `rat canon add …`.
+- `active`/`repealed`: отменённое правило остаётся видимым (`rat canon ls
+  --state all`), удаления нет. `--supersedes` помечает заменённое правило
+  «заменено правилом KEY-Cn» и ставит ссылку на новое.
+- Канон не пишет событий в `events` (как милстоуны): аудит — в полях записи
+  (`created_by`/`repealed_by`/`repeal_reason` + `supersedes`/`superseded_by`).
+- API: `GET/POST /api/canon`, `PATCH /api/canon/:ref?project=K`
+  (`state: "repealed" | "active"`; `project` обязателен в query или теле).
+- В контекст LLM правила попадают первыми: `rat export --format jsonl --events
+  --out -` начинается с `{"type":"canon",…}`; в `md` — блок `## Канон`.
 
 ## Дешёвое чтение
 
