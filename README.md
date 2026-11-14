@@ -1,5 +1,7 @@
 # RatIssues
 
+[![tests](https://github.com/JustOxlamon/ratissues/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/JustOxlamon/ratissues/actions/workflows/test.yml)
+
 Локальный трекер задач для множества мелких проектов: одна SQLite-база на всё,
 CLI с JSON-выводом для LLM и простой web UI (Tailwind, dark) для человека.
 
@@ -369,7 +371,8 @@ npm run build:css                                             # пересобр
 
 `node --test tests/` с каталогом не работает — передавайте шаблон в кавычках,
 как показано выше. Каждый тест открывает свою временную базу; рабочая
-`data/issues.db` не затрагивается.
+`data/issues.db` не затрагивается. CI (GitHub Actions) гоняет `npm test` на
+push в `main` и на pull request.
 
 Сборки нет. `tools/build-css.mjs` и `web/app.css` уже есть; Tailwind
 компилируется standalone CLI, результат попадаёт в git, а сервер не собирает
