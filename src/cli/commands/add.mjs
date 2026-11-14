@@ -7,7 +7,7 @@ export const meta = {
   summary: 'создать задачу',
   usage:
     'rat add "title" [--project K] [--body TEXT|-] [--label a,b] [--priority 0..3] ' +
-    '[--ref ...] [--assignee ...] [--idem UUID] [--json]',
+    '[--ref ...] [--assignee ...] [--milestone NAME] [--idem UUID] [--json]',
 };
 
 /**
@@ -17,7 +17,7 @@ export const meta = {
  */
 export async function run(ctx) {
   const { flags, positionals } = parseArgs(ctx.args, {
-    values: ['project', 'body', 'label', 'priority', 'ref', 'assignee', 'idem'],
+    values: ['project', 'body', 'label', 'priority', 'ref', 'assignee', 'milestone', 'idem'],
     hint: meta.usage,
   });
 
@@ -47,6 +47,7 @@ export async function run(ctx) {
     labels: flags.label ?? null,
     assignee: flags.assignee ?? null,
     ref: flags.ref ?? null,
+    milestone: flags.milestone ?? null,
     actor: ctx.flags.actor,
     idem: flags.idem ?? null,
     cwd: ctx.cwd,

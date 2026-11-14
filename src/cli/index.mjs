@@ -16,6 +16,7 @@ import * as exportCommand from './commands/export.mjs';
 import * as initCommand from './commands/init.mjs';
 import * as logCommand from './commands/log.mjs';
 import * as lsCommand from './commands/ls.mjs';
+import * as milestoneCommand from './commands/milestone.mjs';
 import * as nextCommand from './commands/next.mjs';
 import * as projectCommand from './commands/project.mjs';
 import * as serveCommand from './commands/serve.mjs';
@@ -28,6 +29,7 @@ const COMMAND_MODULES = [
   doctorCommand,
   backupCommand,
   projectCommand,
+  milestoneCommand,
   addCommand,
   lsCommand,
   showCommand,

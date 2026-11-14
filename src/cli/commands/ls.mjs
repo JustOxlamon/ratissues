@@ -8,7 +8,7 @@ export const meta = {
   summary: 'список задач с фильтрами',
   usage:
     'rat ls [project] [-s open|doing|blocked|deferred|done|cancelled|active|all] [--label X] ' +
-    '[--priority N|pN|0..1] [-q TEXT] [--limit N] [--sort pri|updated] [--cursor C] [--all] [--json]',
+    '[--priority N|pN|0..1] [-q TEXT] [--milestone NAME|none] [--limit N] [--sort pri|updated] [--cursor C] [--all] [--json]',
 };
 
 /**
@@ -20,7 +20,7 @@ export const meta = {
  */
 export function run(ctx) {
   const { flags, positionals } = parseArgs(ctx.args, {
-    values: ['status', 'label', 'priority', 'query', 'limit', 'sort', 'cursor'],
+    values: ['status', 'label', 'priority', 'query', 'limit', 'sort', 'cursor', 'milestone'],
     booleans: ['all'],
     aliases: { s: 'status', q: 'query' },
     hint: meta.usage,
@@ -51,6 +51,7 @@ export function run(ctx) {
     label: flags.label ?? null,
     q: flags.query ?? null,
     priority: flags.priority ?? null,
+    milestone: flags.milestone ?? null,
     limit: flags.limit ?? 50,
     sort: flags.sort ?? 'pri',
     cursor: flags.cursor ?? null,
@@ -77,7 +78,7 @@ export function run(ctx) {
 
 function printTable(ctx, issues) {
   const color = useColor(ctx.io, ctx.env);
-  const headers = ['ID', 'PRI', 'STATUS', 'AGE', 'ASSIGNEE', 'LABELS', 'TITLE'];
+  const headers = ['ID', 'PRI', 'STATUS', 'AGE', 'ASSIGNEE', 'LABELS', 'MILESTONE', 'TITLE'];
   const rows = issues.map((issue) => [
     issue.id,
     `p${issue.priority}`,
@@ -85,6 +86,7 @@ function printTable(ctx, issues) {
     formatAge(issue.created_at),
     issue.assignee ?? '—',
     issue.labels.length ? issue.labels.join(',') : '—',
+    issue.milestone ?? '—',
     issue.title,
   ]);
 

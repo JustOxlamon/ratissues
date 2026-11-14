@@ -7,7 +7,7 @@ export const meta = {
   summary: 'править поля задачи (каждое изменение → событие edit)',
   usage:
     'rat edit ID [--title T|-] [--body T|-] [--priority 0..3] [--label +x,-y] ' +
-    '[--assignee A] [--ref R] [--json]',
+    '[--assignee A] [--ref R] [--milestone NAME|-] [--json]',
 };
 
 /**
@@ -18,7 +18,7 @@ export const meta = {
  */
 export async function run(ctx) {
   const { flags, positionals } = parseArgs(ctx.args, {
-    values: ['title', 'body', 'priority', 'label', 'assignee', 'ref'],
+    values: ['title', 'body', 'priority', 'label', 'assignee', 'ref', 'milestone'],
     multi: ['label'],
     hint: meta.usage,
   });
@@ -43,10 +43,11 @@ export async function run(ctx) {
   if (flags.priority !== undefined) changes.priority = flags.priority;
   if (flags.assignee !== undefined) changes.assignee = flags.assignee;
   if (flags.ref !== undefined) changes.ref = flags.ref;
+  if (flags.milestone !== undefined) changes.milestone = flags.milestone;
   if (flags.label !== undefined) changes.labels = parseLabelFlags(flags.label);
 
   if (Object.keys(changes).length === 0) {
-    throw new UsageError('edit: нужно хотя бы одно изменение (--title/--body/--priority/--label/--assignee/--ref).', {
+    throw new UsageError('edit: нужно хотя бы одно изменение (--title/--body/--priority/--label/--assignee/--ref/--milestone).', {
       code: 'no_changes',
       hint: meta.usage,
     });

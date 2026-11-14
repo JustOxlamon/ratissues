@@ -60,6 +60,7 @@ function printHuman(ctx, { issue, events }) {
   const meta2 = [
     `Исполнитель: ${issue.assignee ?? '—'}`,
     `Ссылка: ${issue.ref ?? '—'}`,
+    `Милстоун: ${issue.milestone ?? '—'}`,
   ];
   ctx.print(meta2.join('   '));
 
