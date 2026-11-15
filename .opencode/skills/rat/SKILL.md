@@ -114,7 +114,7 @@ rat milestone reopen v1.0 --project AXEL
 (номер по проекту). Это то, что оператор и LLM должны знать о проекте наверняка.
 
 ```bash
-rat canon ls --project AXEL --json           # актуальные правила (читай перед работой)
+rat canon ls AXEL --json                       # актуальные правила (читай перед работой)
 rat canon add "Не добавлять npm-зависимости" --project AXEL --body "только node:*" --source AXEL-7
 rat canon add "Перешли на vite" --project AXEL --supersedes AXEL-C1   # ставит AXEL-C1 в repealed
 rat canon show AXEL-C2 --json
@@ -123,8 +123,9 @@ rat canon repeal AXEL-C2 --reason "развилка решена иначе"   #
 rat canon reactivate AXEL-C2                                 # вернуть в активные
 ```
 
-- Перед работой в проекте читай активные правила: `rat canon ls --project K
-  --json`; после прохождения развилки фиксируй решение `rat canon add …`.
+- Перед работой в проекте читай активные правила: `rat canon ls AXEL --json`
+  (проект — позиционным аргументом; флага `--project` у `ls` нет); после
+  прохождения развилки фиксируй решение `rat canon add …`.
 - `active`/`repealed`: отменённое правило остаётся видимым (`rat canon ls
   --state all`), удаления нет. `--supersedes` помечает заменённое правило
   «заменено правилом KEY-Cn» и ставит ссылку на новое.

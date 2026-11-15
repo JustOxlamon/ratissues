@@ -1,5 +1,5 @@
 import { UsageError } from '../../core/db.mjs';
-import { listCanon, resolveProject } from '../../core/query.mjs';
+import { listCanon, normalizeProjectKey, resolveProject } from '../../core/query.mjs';
 import {
   createCanon,
   getCanon,
@@ -83,7 +83,7 @@ async function runAdd(ctx, args) {
 
 function runLs(ctx, args) {
   const { flags, positionals } = parseArgs(args, {
-    values: ['project', 'state', 'label', 'q'],
+    values: ['state', 'label', 'q'],
     aliases: { s: 'state', q: 'q' },
     hint: 'rat canon ls [project] [--state active|repealed|all] [--label x] [-q TEXT]',
   });
@@ -270,12 +270,28 @@ function printShow(ctx, rule) {
 /**
  * Проект-скоуп для ссылки. Полный id (KEY-C1) несёт проект сам; для C1/голого
  * числа — стандартное определение проекта (--project → RAT_PROJECT → root_path
- * → default).
+ * → default). Флаг --project у полного адреса обязан совпадать с проектом из
+ * адреса — иначе он бы молча игнорировался.
  */
 function scopeForRef(ctx, projectFlag, ref) {
-  if (projectFlag) return projectFlag;
   const text = String(ref).trim();
-  if (/^[A-Za-z0-9]{2,10}-C\d+$/i.test(text)) return null;
+  const full = /^([A-Za-z0-9]{2,10})-C\d+$/i.exec(text);
+  if (full && projectFlag) {
+    const embedded = normalizeProjectKey(full[1]);
+    const given = normalizeProjectKey(projectFlag);
+    if (given !== embedded) {
+      throw new UsageError(
+        `Флаг --project ${projectFlag} не совпадает с проектом ${embedded} в адресе «${text}»; ` +
+          'проект в полном адресе уже задан, а --project нужен только для C1/числа.',
+        {
+          code: 'invalid_arguments',
+          hint: 'rat canon show C1 --project K',
+        },
+      );
+    }
+  }
+  if (projectFlag) return projectFlag;
+  if (full) return null;
   return resolveProject(ctx.openDatabase(), { project: null, cwd: ctx.cwd, env: ctx.env }).key;
 }
 

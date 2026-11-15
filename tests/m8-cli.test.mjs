@@ -76,6 +76,39 @@ test('CLI: canon ls — таблица, --json, --state, --label, -q', (t) => {
   assert.equal(quiet.stdout.trim(), 'RAT-C2\nRAT-C1');
 });
 
+test('CLI: canon ls --project отвергается с exit 2, проект — только позиционно', (t) => {
+  const box = createSandbox(t, 'rat-m8-cli-');
+  init(box);
+  runCli(['canon', 'add', 'Правило', '--project', 'RAT'], { dbPath: box.dbPath });
+
+  const res = runCli(['canon', 'ls', '--project', 'RAT', '--json'], { dbPath: box.dbPath });
+  assert.equal(res.code, 2);
+  assert.equal(errorOf(res).error.code, 'unknown_flag');
+  assert.match(errorOf(res).error.message, /Неизвестный флаг --project/);
+
+  const flagless = runCli(['canon', 'ls', '--project', '--json'], { dbPath: box.dbPath });
+  assert.equal(flagless.code, 2);
+  assert.equal(errorOf(flagless).error.code, 'unknown_flag');
+
+  const byPosition = json(runCli(['canon', 'ls', 'RAT', '--json'], { dbPath: box.dbPath }));
+  assert.deepEqual(byPosition.canon.map((rule) => rule.id), ['RAT-C1']);
+});
+
+test('CLI: canon show — полный адрес + несовпадающий --project → exit 2', (t) => {
+  const box = createSandbox(t, 'rat-m8-cli-');
+  init(box);
+  runCli(['project', 'add', 'PRON', '--name', 'Pron'], { dbPath: box.dbPath });
+  runCli(['canon', 'add', 'Правило', '--project', 'RAT'], { dbPath: box.dbPath });
+
+  const mismatch = runCli(['canon', 'show', 'RAT-C1', '--project', 'PRON', '--json'], { dbPath: box.dbPath });
+  assert.equal(mismatch.code, 2);
+  assert.equal(errorOf(mismatch).error.code, 'invalid_arguments');
+
+  const matching = runCli(['canon', 'show', 'RAT-C1', '--project', 'RAT', '--json'], { dbPath: box.dbPath });
+  assert.equal(matching.code, 0, matching.stderr);
+  assert.equal(json(matching).id, 'RAT-C1');
+});
+
 test('CLI: canon show — --json со всеми полями', (t) => {
   const box = createSandbox(t, 'rat-m8-cli-');
   init(box);
